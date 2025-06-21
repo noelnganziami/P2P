@@ -5,33 +5,42 @@ users = users.map(user => ({
     ...user,
     walletBalance: user.walletBalance || { USD: 0, ZAR: 0, BTC: 0 },
     hasMadeInitialSystemPurchase: user.hasMadeInitialSystemPurchase === undefined ? false : user.hasMadeInitialSystemPurchase,
-    zarProfitWallet: user.zarProfitWallet === undefined ? 0 : user.zarProfitWallet,
-    usdProfitWallet: user.usdProfitWallet === undefined ? 0 : user.usdProfitWallet
+    p2pMarketRequiresInitialPurchase: user.p2pMarketRequiresInitialPurchase === undefined ? true : user.p2pMarketRequiresInitialPurchase,
+    coinBalance: user.coinBalance === undefined ? 0 : parseFloat(user.coinBalance)
 }));
 
 let transactions = JSON.parse(localStorage.getItem('p2p_reform_transactions')) || [];
 let sellOffers = JSON.parse(localStorage.getItem('p2p_reform_sell_offers')) || [];
-let investments = JSON.parse(localStorage.getItem('p2p_reform_investments')) || [];
+let userAssets = JSON.parse(localStorage.getItem('p2p_reform_user_assets')) || [];
 let globalNotifications = JSON.parse(localStorage.getItem('p2p_reform_global_notifications')) || [];
 let supportTickets = JSON.parse(localStorage.getItem('p2p_reform_support_tickets')) || [];
-let withdrawalRequests = JSON.parse(localStorage.getItem('p2p_reform_withdrawal_requests')) || []; // New State
+let withdrawalRequests = JSON.parse(localStorage.getItem('p2p_reform_withdrawal_requests')) || [];
+let systemPurchaseRequests = JSON.parse(localStorage.getItem('p2p_reform_system_purchases')) || [];
 
 let systemSaleConfig = JSON.parse(localStorage.getItem('p2p_reform_system_sale_config')) || {
     saleDurationSeconds: 300,
     cooldownDurationSeconds: 60,
-    defaultSystemCurrency: "USD"
+    defaultSystemCurrency: "USD",
+    p2pRequirementEnabled: true
 };
+
 let systemSalePlans = JSON.parse(localStorage.getItem('p2p_reform_system_sale_plans')) || [];
-let systemPurchaseRequests = JSON.parse(localStorage.getItem('p2p_reform_system_purchases')) || [];
+// Simple migration for old data structure with maturityDays
+systemSalePlans = systemSalePlans.map(plan => {
+    if (plan.maturityDays && !plan.maturityDurationSeconds) {
+        plan.maturityDurationSeconds = plan.maturityDays * 86400; // Convert days to seconds
+        delete plan.maturityDays; // Remove old property
+    }
+    // Ensure all plans have a duration, default to 7 days if somehow missing
+    if (!plan.maturityDurationSeconds) {
+        plan.maturityDurationSeconds = 7 * 86400;
+    }
+    return plan;
+});
+
 
 const ADMIN_EMAIL = "scothyjunior@gmail.com";
 const ADMIN_PASSWORD = "Djsthy@2020";
-
-const COIN_SALE_BONUS_PERCENTAGE = 0.08;
-const FIAT_PROFIT_PERCENTAGE = 0.25;
-const PLACEHOLDER_USD_TO_ZAR_RATE = 18;
-const DEFAULT_BTC_P2P_SELL_PRICE = 0.00002;
-const DEFAULT_BASE_COIN_PRICE_USD = 0.50; // Fallback price for users without a purchase history
 
 let saleCycleInterval;
 let coinSaleActive = false;
@@ -39,6 +48,7 @@ let currentPhaseTimeLeft = 0;
 let saleNotificationShown = false;
 
 let userCoinChartInstance = null;
+let userAssetCountdownInterval = null;
 
 let currentViewId = 'landing-page-view';
 let currentDashboardSectionId = { user: 'ud-overview', admin: 'ad-overview' };
@@ -75,13 +85,13 @@ function saveState() {
         localStorage.setItem('p2p_reform_users', JSON.stringify(users));
         localStorage.setItem('p2p_reform_transactions', JSON.stringify(transactions));
         localStorage.setItem('p2p_reform_sell_offers', JSON.stringify(sellOffers));
-        localStorage.setItem('p2p_reform_investments', JSON.stringify(investments));
+        localStorage.setItem('p2p_reform_user_assets', JSON.stringify(userAssets));
         localStorage.setItem('p2p_reform_system_sale_config', JSON.stringify(systemSaleConfig));
         localStorage.setItem('p2p_reform_system_sale_plans', JSON.stringify(systemSalePlans));
         localStorage.setItem('p2p_reform_system_purchases', JSON.stringify(systemPurchaseRequests));
         localStorage.setItem('p2p_reform_global_notifications', JSON.stringify(globalNotifications));
         localStorage.setItem('p2p_reform_support_tickets', JSON.stringify(supportTickets));
-        localStorage.setItem('p2p_reform_withdrawal_requests', JSON.stringify(withdrawalRequests)); // Save new state
+        localStorage.setItem('p2p_reform_withdrawal_requests', JSON.stringify(withdrawalRequests)); 
     } catch (e) {
         console.error("Error saving state to localStorage:", e);
         displayNotification("Could not save data. LocalStorage might be full or disabled.", "error");
@@ -156,7 +166,7 @@ function displayNotification(message, type = 'info') {
             break;
     }
     titleEl.innerHTML = iconHtml + titleEl.textContent;
-    messageEl.textContent = message;
+    messageEl.innerHTML = message; // Use innerHTML for potential line breaks
     modal.style.display = 'block';
 }
 function closePopupNotificationModal() {
@@ -167,7 +177,7 @@ let confirmCallback = null;
 let promptCallback = null;
 
 function showCustomConfirm(message, onConfirm, title = "Confirmation", okButtonText = "OK", okButtonClass = "danger") {
-    document.getElementById('custom-confirm-message').textContent = message;
+    document.getElementById('custom-confirm-message').innerHTML = message; // Use innerHTML to support simple tags like <br>
     document.getElementById('custom-confirm-title').textContent = title;
     const okButton = document.getElementById('custom-confirm-ok-button');
     okButton.textContent = okButtonText;
@@ -206,6 +216,28 @@ function closeCustomPromptModal(isSubmitted) {
     }
     promptCallback = null;
     inputField.value = '';
+}
+
+function openProofViewerModal(dataUrl, caption = '') {
+    const modal = document.getElementById('proof-viewer-modal');
+    const img = document.getElementById('proof-viewer-image');
+    const cap = document.getElementById('proof-viewer-caption');
+    if (modal && img && dataUrl && dataUrl.startsWith('data:image')) {
+        img.src = dataUrl;
+        cap.textContent = caption;
+        modal.style.display = 'block';
+    } else if (dataUrl) {
+        // Fallback for non-image data URLs or external links
+        window.open(dataUrl, '_blank');
+    }
+}
+
+function closeProofViewerModal() {
+    const modal = document.getElementById('proof-viewer-modal');
+    if (modal) {
+        modal.style.display = 'none';
+        document.getElementById('proof-viewer-image').src = ''; // Clear image
+    }
 }
 
 
@@ -292,6 +324,33 @@ function formatCurrency(value, currency = "USD") {
     return (symbols[currency] || currency + ' ') + (isNaN(numValue) ? '0.00' : numValue.toFixed(2));
 }
 
+function formatDuration(seconds) {
+    if (seconds >= 86400 && seconds % 86400 === 0) {
+        const days = seconds / 86400;
+        return `${days} ${days > 1 ? 'Days' : 'Day'}`;
+    }
+    if (seconds >= 3600 && seconds % 3600 === 0) {
+        const hours = seconds / 3600;
+        return `${hours} ${hours > 1 ? 'Hours' : 'Hour'}`;
+    }
+    const minutes = Math.round(seconds / 60);
+    return `${minutes} ${minutes > 1 ? 'Minutes' : 'Minute'}`;
+}
+
+function deconstructDuration(seconds) {
+    if (seconds >= 86400 && seconds % 86400 === 0) {
+        return { value: seconds / 86400, unit: 'Days' };
+    }
+    if (seconds >= 3600 && seconds % 3600 === 0) {
+        return { value: seconds / 3600, unit: 'Hours' };
+    }
+    if (seconds >= 60 && seconds % 60 === 0) {
+        return { value: seconds / 60, unit: 'Minutes' };
+    }
+    // Fallback for weird numbers (e.g. from old data or manual edit), just show in minutes.
+    return { value: Math.round(seconds / 60), unit: 'Minutes' };
+}
+
 
 function togglePasswordVisibility(inputId) {
     const passwordInput = document.getElementById(inputId);
@@ -326,42 +385,36 @@ function showUserDashboardSection(sectionId, buttonElement, skipHistory = false)
 
     currentDashboardSectionId.user = sectionId;
     if (!skipHistory) sessionStorage.setItem('p2p_reform_userSection', sectionId);
-
-    const p2pMarketDisabledMessage = document.getElementById('p2p-market-disabled-message');
-    const createSellOfferButton = document.getElementById('create-sell-offer-button');
-    const initialSystemPurchaseMessage = document.getElementById('system-sale-initial-purchase-message');
-
+    
+    // Clear asset countdown interval when leaving the 'My Assets' page
+    if (sectionId !== 'ud-my-assets' && userAssetCountdownInterval) {
+        clearInterval(userAssetCountdownInterval);
+        userAssetCountdownInterval = null;
+    }
+    
+    const isP2PLocked = (currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase);
 
     if (sectionId === 'ud-system-sale') {
         updateSystemSaleUserView();
-        renderAvailableOffers('system-sale-p2p-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
+        const initialSystemPurchaseMessage = document.getElementById('system-sale-initial-purchase-message');
          if (initialSystemPurchaseMessage) {
-            initialSystemPurchaseMessage.classList.toggle('hidden', (currentUser && currentUser.hasMadeInitialSystemPurchase));
+            const showMessage = currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase;
+            initialSystemPurchaseMessage.classList.toggle('hidden', !showMessage);
         }
     }
     if (sectionId === 'ud-kyc') {
         renderKycForm();
     }
+    if (sectionId === 'ud-my-assets') {
+        renderUserAssets();
+    }
     if (sectionId === 'ud-p2p-market') {
+        document.getElementById('p2p-market-disabled-message').classList.toggle('hidden', !isP2PLocked);
         renderMySellOffers();
-        renderAvailableOffers('available-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
-        prefillSellOfferFields(); // MODIFIED to handle new logic
-
-        if (p2pMarketDisabledMessage && createSellOfferButton) {
-            const p2pDisabled = !(currentUser && currentUser.hasMadeInitialSystemPurchase);
-            p2pMarketDisabledMessage.classList.toggle('hidden', !p2pDisabled);
-            createSellOfferButton.disabled = p2pDisabled;
-
-            const availableOfferButtons = document.querySelectorAll('#available-offers-list .offer-item button');
-            availableOfferButtons.forEach(btn => btn.disabled = p2pDisabled);
-            const systemSaleOfferButtons = document.querySelectorAll('#system-sale-p2p-offers-list .offer-item button');
-            systemSaleOfferButtons.forEach(btn => btn.disabled = p2pDisabled);
-        }
     }
     if (sectionId === 'ud-withdraw-funds') {
         renderUserWithdrawalHistory();
         populateWithdrawalDestination(); // Initialize based on default currency
-        // Add event listener to update destination on currency change
         const withdrawCurrencySelect = document.getElementById('withdraw-currency');
         if (withdrawCurrencySelect) {
             withdrawCurrencySelect.removeEventListener('change', populateWithdrawalDestination); // Remove old if any
@@ -382,6 +435,12 @@ function showAdminDashboardSection(sectionId, buttonElement, skipHistory = false
     currentDashboardSectionId.admin = sectionId;
     if (!skipHistory) sessionStorage.setItem('p2p_reform_adminSection', sectionId);
 
+    if (sectionId === 'ad-manage-p2p-offers') {
+        renderAdminP2POffers();
+    }
+    if (sectionId === 'ad-user-assets') {
+        renderAdminUserAssets();
+    }
     if (sectionId === 'ad-support-tickets') {
         renderAdminSupportTickets();
     }
@@ -440,13 +499,10 @@ function handleRegister() {
         coinBalance: 0,
         walletBalance: { USD: 0, ZAR: 0, BTC: 0 },
         hasMadeInitialSystemPurchase: false,
-        zarProfitWallet: 0,
-        usdProfitWallet: 0,
+        p2pMarketRequiresInitialPurchase: systemSaleConfig.p2pRequirementEnabled,
         status: 'active',
         kycStatus: 'none',
         kycData: { bankName: '', bankAccount: '', usdtWallet: '', telephone: '', country: '', documentUrl: null, documentFilename: null, rejectionReason: null },
-        lastSystemPurchaseBonusPercentage: 0,
-        lastSystemPurchaseBaseCoinPrice: 0
     };
     users.push(newUser);
     currentUser = newUser;
@@ -478,11 +534,9 @@ function handleLogin() {
         currentUser.kycData = currentUser.kycData || { bankName: '', bankAccount: '', usdtWallet: '', telephone: '', country: '', documentUrl: null, documentFilename: null, rejectionReason: null };
         currentUser.walletBalance = currentUser.walletBalance || { USD: 0, ZAR: 0, BTC: 0 };
         currentUser.hasMadeInitialSystemPurchase = currentUser.hasMadeInitialSystemPurchase === undefined ? false : currentUser.hasMadeInitialSystemPurchase;
-        currentUser.zarProfitWallet = currentUser.zarProfitWallet === undefined ? 0 : currentUser.zarProfitWallet;
-        currentUser.usdProfitWallet = currentUser.usdProfitWallet === undefined ? 0 : currentUser.usdProfitWallet;
+        currentUser.p2pMarketRequiresInitialPurchase = currentUser.p2pMarketRequiresInitialPurchase === undefined ? true : currentUser.p2pMarketRequiresInitialPurchase;
+        currentUser.coinBalance = currentUser.coinBalance === undefined ? 0 : parseFloat(currentUser.coinBalance);
         currentUser.kycStatus = currentUser.kycStatus || 'none';
-        currentUser.lastSystemPurchaseBonusPercentage = currentUser.lastSystemPurchaseBonusPercentage === undefined ? 0 : currentUser.lastSystemPurchaseBonusPercentage;
-        currentUser.lastSystemPurchaseBaseCoinPrice = currentUser.lastSystemPurchaseBaseCoinPrice === undefined ? 0 : currentUser.lastSystemPurchaseBaseCoinPrice;
         saveState();
 
         switchView('user-dashboard-view');
@@ -492,8 +546,8 @@ function handleLogin() {
              displayNotification("Welcome! Please complete your KYC verification to access all features.", "warning");
              addGlobalNotification(currentUser.id, "KYC Needed", "Please complete your KYC to access all features.", "ud-kyc", "warning");
              showUserDashboardSection('ud-kyc', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-kyc"]'));
-        } else if (currentUser.coinBalance === 0 && currentUser.kycStatus === 'approved' && !currentUser.hasMadeInitialSystemPurchase) {
-            displayNotification("Welcome! Please make your first COIN purchase from a System Plan to unlock P2P trading.", "info");
+        } else if (currentUser.kycStatus === 'approved' && !currentUser.hasMadeInitialSystemPurchase && currentUser.p2pMarketRequiresInitialPurchase) {
+            displayNotification("Welcome! Please purchase your first Asset Program to get started.", "info");
             showUserDashboardSection('ud-system-sale', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-system-sale"]'));
         }
     } else { displayNotification('Invalid email or password.', 'error'); }
@@ -507,6 +561,7 @@ function handleLogout() {
     currentUser = null;
 
     if (saleCycleInterval) clearInterval(saleCycleInterval);
+    if (userAssetCountdownInterval) clearInterval(userAssetCountdownInterval);
     coinSaleActive = false;
     saleNotificationShown = false;
     const coinBalanceCard = document.getElementById('user-coin-balance-card');
@@ -533,15 +588,14 @@ function renderUserDashboard() {
     document.getElementById('profile-telephone').textContent = currentUser.kycData?.telephone || 'N/A';
     document.getElementById('profile-country').textContent = currentUser.kycData?.country || 'N/A';
 
-    document.getElementById('coin-balance').textContent = currentUser.coinBalance;
+    document.getElementById('coin-balance').textContent = currentUser.coinBalance.toFixed(2);
     renderWalletBalances();
 
     renderUserCoinChart();
     initializeSystemSaleCycle();
     renderUserPendingTransactions();
-    renderAvailableOffers('available-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
     renderMySellOffers();
-    renderActiveInvestments();
+    renderUserAssets();
     renderP2PTransactionHistory();
     renderUserWithdrawalHistory();
     renderUserSupportTickets();
@@ -569,7 +623,6 @@ function renderWalletBalances() {
             hasVisibleWalletBalance = true;
             const walletCard = document.createElement('div');
             walletCard.className = 'info-card wallet-balance-card';
-            // Check for approved withdrawal for this currency
             const approvedWithdrawal = withdrawalRequests.find(
                 req => req.userId === currentUser.id && req.currency === currency && req.status === 'approved'
             );
@@ -577,7 +630,7 @@ function renderWalletBalances() {
                 walletCard.classList.add('withdrawal-approved');
             }
             let icon = 'fas fa-dollar-sign';
-            if(currency === 'ZAR') icon = 'fas fa-coins'; // Example, change as needed
+            if(currency === 'ZAR') icon = 'fas fa-coins'; 
             if(currency === 'BTC') icon = 'fab fa-bitcoin';
 
             walletCard.innerHTML = `
@@ -588,29 +641,7 @@ function renderWalletBalances() {
             walletGrid.appendChild(walletCard);
         }
     });
-    if (currentUser.zarProfitWallet && currentUser.zarProfitWallet > 0) {
-        hasVisibleWalletBalance = true;
-        const zarProfitCard = document.createElement('div');
-        zarProfitCard.className = 'info-card wallet-balance-card';
-        zarProfitCard.style.borderLeftColor = 'var(--warning-color)';
-        zarProfitCard.innerHTML = `
-            <strong><i class="fas fa-lock"></i> ZAR Profit (Locked)</strong>
-            <span>${formatCurrency(currentUser.zarProfitWallet, "ZAR")}</span>
-        `;
-        walletGrid.appendChild(zarProfitCard);
-    }
-    if (currentUser.usdProfitWallet && currentUser.usdProfitWallet > 0) {
-        hasVisibleWalletBalance = true;
-        const usdProfitCard = document.createElement('div');
-        usdProfitCard.className = 'info-card wallet-balance-card';
-        usdProfitCard.style.borderLeftColor = 'var(--warning-color)';
-        usdProfitCard.innerHTML = `
-            <strong><i class="fas fa-lock"></i> USD Profit (Locked)</strong>
-            <span>${formatCurrency(currentUser.usdProfitWallet, "USD")}</span>
-        `;
-        walletGrid.appendChild(usdProfitCard);
-    }
-
+   
     walletGrid.style.display = hasVisibleWalletBalance ? 'grid' : 'none';
 }
 
@@ -618,7 +649,6 @@ function renderWalletBalances() {
 function toggleUserProfileDetails() {
     const detailsDiv = document.getElementById('user-profile-details-collapsible');
     const button = document.getElementById('toggle-profile-details-btn');
-    const icon = button.querySelector('i');
     detailsDiv.classList.toggle('hidden');
     if (detailsDiv.classList.contains('hidden')) {
         button.innerHTML = '<i class="fas fa-user-circle"></i> Show Full Profile Details';
@@ -628,25 +658,29 @@ function toggleUserProfileDetails() {
 }
 
 function renderUserCoinChart() {
-     if (!currentUser || currentUser.isAdmin) return;
+    if (!currentUser || currentUser.isAdmin) return;
     const chartCanvas = document.getElementById('userCoinChart');
     if (!chartCanvas) return;
     const ctx = chartCanvas.getContext('2d');
 
-    const totalInvested = investments
-        .filter(inv => inv.userId === currentUser.id && inv.status === 'active')
-        .reduce((sum, inv) => sum + inv.amountInvested, 0);
+    // Total coins that will eventually become liquid.
+    const totalMaturing = userAssets
+        .filter(asset => asset.userId === currentUser.id && (asset.status === 'maturing' || asset.status === 'repackaged_profit_maturing'))
+        .reduce((sum, asset) => sum + asset.totalReturnCoins, 0);
+    
+    const liquidBalanceForChart = currentUser.coinBalance;
 
     if (userCoinChartInstance) userCoinChartInstance.destroy();
 
     userCoinChartInstance = new Chart(ctx, {
         type: 'pie',
         data: {
-            labels: ['Available Balance', 'Actively Invested'],
+            labels: ['Liquid Coins', 'Coins in Maturing Programs'],
             datasets: [{
-                label: 'Coin Distribution', data: [currentUser.coinBalance, totalInvested],
-                backgroundColor: [ 'rgba(0, 168, 232, 0.8)', 'rgba(27, 38, 59, 0.8)' ],
-                borderColor: [ 'rgba(0, 168, 232, 1)', 'rgba(27, 38, 59, 1)' ],
+                label: 'Coin Distribution', 
+                data: [liquidBalanceForChart, totalMaturing],
+                backgroundColor: [ 'rgba(82, 183, 136, 0.8)', 'rgba(247, 127, 0, 0.8)'],
+                borderColor: [ 'rgba(82, 183, 136, 1)', 'rgba(247, 127, 0, 1)'],
                 borderWidth: 2
             }]
         },
@@ -817,9 +851,8 @@ function updateSystemSaleUserView() {
     const countdownDisplay = document.getElementById('countdown-timer');
     const plansArea = document.getElementById('system-sale-plans-area');
     const userPendingMessageArea = document.getElementById('system-sale-user-pending-message');
-    const coinBalanceCard = document.getElementById('user-coin-balance-card');
-
-    if (!countdownDisplay || !plansArea || !userPendingMessageArea || !coinBalanceCard) return;
+    
+    if (!countdownDisplay || !plansArea || !userPendingMessageArea) return;
 
     const minutes = Math.floor(Math.max(0, currentPhaseTimeLeft) / 60);
     const seconds = Math.max(0, currentPhaseTimeLeft) % 60;
@@ -827,64 +860,106 @@ function updateSystemSaleUserView() {
 
     if (coinSaleActive) {
         countdownDisplay.innerHTML = `<i class="fas fa-fire"></i> SALE ACTIVE! Ends in: ${timeString}`;
-        coinBalanceCard.classList.add('sale-active-balance');
         if (!saleNotificationShown && currentUser && currentUser.kycStatus === 'approved') {
-            displayNotification("System Coin Sale is Active! Your coins (if any) can be sold on the P2P market.", "info");
+            displayNotification("The Marketplace is open for purchases!", "info");
             saleNotificationShown = true;
         }
 
         if(currentUser && currentUser.kycStatus === 'approved'){
             plansArea.classList.remove('hidden');
             userPendingMessageArea.classList.add('hidden');
-            renderUserSystemSalePlans();
-            renderAvailableOffers('system-sale-p2p-offers-list');
+            renderMarketplaceItems();
         } else {
             plansArea.classList.add('hidden');
-            userPendingMessageArea.innerHTML = '<p style="padding:1rem; background-color: #FFF3E0; border-left: 4px solid var(--warning-color); color: var(--text-dark);"><i class="fas fa-exclamation-triangle"></i> Please complete and get your KYC approved to participate in system coin sales.</p>';
+            userPendingMessageArea.innerHTML = '<p style="padding:1rem; background-color: #FFF3E0; border-left: 4px solid var(--warning-color); color: var(--text-dark);"><i class="fas fa-exclamation-triangle"></i> Please complete and get your KYC approved to purchase from the marketplace.</p>';
             userPendingMessageArea.classList.remove('hidden');
         }
     } else {
         countdownDisplay.innerHTML = `<i class="fas fa-history"></i> Next sale starts in: ${timeString}`;
-        coinBalanceCard.classList.remove('sale-active-balance');
         plansArea.classList.add('hidden');
-        userPendingMessageArea.innerHTML = '<p style="padding:1rem; background-color: #E1F5FE; border-left: 4px solid var(--accent-color); color: var(--primary-color);"><i class="fas fa-hourglass-start"></i> System coin sale is currently in cooldown. Please wait for the next sale period.</p>';
+        userPendingMessageArea.innerHTML = '<p style="padding:1rem; background-color: #E1F5FE; border-left: 4px solid var(--accent-color); color: var(--primary-color);"><i class="fas fa-hourglass-start"></i> The marketplace is currently in cooldown. Please wait for the next sale period.</p>';
         userPendingMessageArea.classList.remove('hidden');
         saleNotificationShown = false;
     }
 }
 
-function renderUserSystemSalePlans() {
-    const plansListDiv = document.getElementById('user-system-sale-plans-list');
-    if (!plansListDiv) return;
-    plansListDiv.innerHTML = '';
+function renderMarketplaceItems() {
+    const marketplaceDiv = document.getElementById('user-system-sale-plans-list');
+    if (!marketplaceDiv) return;
+    marketplaceDiv.innerHTML = '';
 
     const activePlans = systemSalePlans.filter(p => p.status === 'active');
+    const isP2PLocked = (currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase);
+    const activeP2POffers = sellOffers.filter(o => o.status === 'active' && o.sellerId !== currentUser?.id);
 
-    if (activePlans.length === 0) {
-        plansListDiv.innerHTML = '<p>No purchase plans currently available from the Seller. Check back later!</p>';
+    if (activePlans.length === 0 && activeP2POffers.length === 0) {
+        marketplaceDiv.innerHTML = '<p>No asset programs or P2P offers currently available. Check back later!</p>';
         return;
     }
+    
+    // Combine and sort if needed, for now just append
+    const allItems = [...activePlans, ...activeP2POffers];
 
-    activePlans.forEach(plan => {
-        const bonusCoins = Math.floor(plan.coinsAwarded * COIN_SALE_BONUS_PERCENTAGE);
-        const totalCoins = plan.coinsAwarded + bonusCoins;
+    allItems.forEach(item => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'system-sale-plan-item';
+        let planName, cost, baseCoins, maturity, returnPercent, totalReturn, currency, onClickAction, itemTypeIcon;
 
-        // Seller payment details are NOT shown here anymore. They are in pending transactions.
-        const planDiv = document.createElement('div');
-        planDiv.className = 'system-sale-plan-item';
-        planDiv.innerHTML = `
-            <h5><i class="fas fa-box-open"></i> ${plan.name}</h5>
-            <p><strong>Cost:</strong> ${formatCurrency(plan.cost, plan.currency || systemSaleConfig.defaultSystemCurrency)}</p>
-            <p><strong>Get:</strong> ${plan.coinsAwarded} COIN <span class="bonus-text">+ ${bonusCoins} COIN Bonus!</span> (Total: ${totalCoins} COIN)</p>
-            <button class="accent" onclick="handleSystemPlanPurchaseRequest('${plan.id}')"><i class="fas fa-shopping-cart"></i> Request Purchase</button>
+        const buyButtonDisabled = isP2PLocked ? 'disabled' : '';
+
+        // Check if it's a system plan or a P2P offer
+        if (item.hasOwnProperty('coinsAwarded')) { // It's a system plan
+            const plan = item;
+            const returnAmount = plan.coinsAwarded * (plan.returnPercentage / 100);
+            
+            planName = plan.name;
+            cost = plan.cost;
+            currency = plan.currency || systemSaleConfig.defaultSystemCurrency;
+            baseCoins = plan.coinsAwarded;
+            maturity = formatDuration(plan.maturityDurationSeconds);
+            returnPercent = plan.returnPercentage;
+            totalReturn = plan.coinsAwarded + returnAmount;
+            onClickAction = `handleSystemPlanPurchaseRequest('${plan.id}')`;
+            itemTypeIcon = 'fa-box-open';
+
+        } else { // It's a P2P offer (which is now always repackaged)
+            const offer = item;
+            onClickAction = `buyFromP2POffer('${offer.id}')`;
+            itemTypeIcon = 'fa-user-tag';
+
+            planName = offer.adminPlanName || `P2P Program from ${offer.sellerName}`;
+            baseCoins = offer.amount; // The full amount being sold
+            cost = offer.amount * offer.adminPrice; // This is the total cost for the buyer
+            currency = offer.adminCurrency;
+            maturity = formatDuration(offer.adminMaturityDurationSeconds);
+            returnPercent = offer.adminReturnPercentage;
+            // The total return for the *next* buyer is the base they buy + profit on that base
+            totalReturn = baseCoins * (1 + returnPercent / 100);
+        }
+
+        itemDiv.innerHTML = `
+            <h5><i class="fas ${itemTypeIcon}"></i> ${planName}</h5>
+            <p><strong>Cost:</strong> ${formatCurrency(cost, currency)}</p>
+            <p><strong>Base Coins:</strong> ${baseCoins.toFixed(2)} COIN</p>
+            <p><strong>Maturity:</strong> ${maturity}</p>
+            <p><strong>Return:</strong> ${returnPercent}%</p>
+            <p style="font-weight:bold;"><strong>Total after maturity:</strong> ${totalReturn.toFixed(2)} COIN</p>
+            <button class="accent" onclick="${onClickAction}" ${buyButtonDisabled && item.hasOwnProperty('adminPrice') ? buyButtonDisabled : ''}><i class="fas fa-shopping-cart"></i> Purchase</button>
         `;
-        plansListDiv.appendChild(planDiv);
+        marketplaceDiv.appendChild(itemDiv);
     });
 }
 
 function handleSystemPlanPurchaseRequest(planId) {
-    if (!coinSaleActive) { displayNotification('System coin sale is not active. Purchase during active sale period.', 'error'); return; }
-    if (currentUser.kycStatus !== 'approved') { displayNotification('Your KYC must be approved to purchase system coins.', 'warning'); return; }
+    if (!coinSaleActive) { 
+        displayNotification('Marketplace is not active. Purchase during active sale period.', 'error'); 
+        return; 
+    }
+    if (currentUser.kycStatus !== 'approved') { 
+        displayNotification('Your KYC must be approved to purchase asset programs. Please go to the KYC section.', 'warning'); 
+        showUserDashboardSection('ud-kyc', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-kyc"]'));
+        return; 
+    }
 
     const plan = systemSalePlans.find(p => p.id === planId);
     if (!plan) { displayNotification('Selected plan not found.', 'error'); return; }
@@ -892,16 +967,16 @@ function handleSystemPlanPurchaseRequest(planId) {
     const existingPendingRequestForThisPlan = systemPurchaseRequests.find(req =>
         req.userId === currentUser.id &&
         req.planDetails && req.planDetails.id === planId &&
-        (req.status === 'awaiting_payment_to_system' || req.status === 'payment_proof_submitted_to_system')
+        (req.status === 'awaiting_payment_to_seller' || req.status === 'payment_proof_submitted_to_seller')
     );
     if (existingPendingRequestForThisPlan) {
-        displayNotification('You already have a pending request for this specific plan. Please complete or wait for it.', 'warning');
+        displayNotification('You already have a pending purchase for this specific program. Please complete or wait for it.', 'warning');
         showUserDashboardSection('ud-pending-transactions', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-pending-transactions"]'));
         return;
     }
-
-    const bonusCoins = Math.floor(plan.coinsAwarded * COIN_SALE_BONUS_PERCENTAGE);
-    const totalCoinsToReceive = plan.coinsAwarded + bonusCoins;
+    
+    const returnAmount = plan.coinsAwarded * (plan.returnPercentage / 100);
+    const totalReturn = plan.coinsAwarded + returnAmount;
 
     const newRequest = {
         id: generateId(),
@@ -913,19 +988,17 @@ function handleSystemPlanPurchaseRequest(planId) {
             name: plan.name,
             cost: plan.cost,
             currency: plan.currency || systemSaleConfig.defaultSystemCurrency,
-            coinsAwarded: plan.coinsAwarded,
-            bonusCoins: bonusCoins,
-            totalCoinsToReceive: totalCoinsToReceive,
-            paymentInfo: { // Store payment info for the pending transaction display
+            baseCoins: plan.coinsAwarded,
+            returnPercentage: plan.returnPercentage,
+            maturityDurationSeconds: plan.maturityDurationSeconds,
+            totalReturnCoins: totalReturn,
+            paymentInfo: { 
                 bankName: plan.planBankName,
                 bankAccount: plan.planBankAccount,
                 btcWallet: plan.planBtcWallet
             }
         },
-        amount: totalCoinsToReceive,
-        totalPrice: plan.cost,
-        currency: plan.currency || systemSaleConfig.defaultSystemCurrency,
-        status: 'awaiting_payment_to_system',
+        status: 'awaiting_payment_to_seller',
         paymentProofFilename: null,
         paymentProofDataUrl: null,
         createdAt: new Date().toISOString()
@@ -934,118 +1007,38 @@ function handleSystemPlanPurchaseRequest(planId) {
     saveState();
 
     displayNotification(`Purchase request for '${plan.name}' submitted. Make payment to Seller and upload proof via 'Pending Transactions'.`, 'info');
-    addGlobalNotification('admin', 'System Sale Request', `${currentUser.name} requested to buy plan '${plan.name}'.`, 'ad-system-sale-requests');
-    renderUserPendingTransactions();
+    addGlobalNotification('admin', 'Seller Sale Request', `${currentUser.name} requested to buy program '${plan.name}'.`, 'ad-system-sale-requests');
+    showUserDashboardSection('ud-pending-transactions', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-pending-transactions"]'));
 }
 
 // --- P2P Market ---
-function prefillSellOfferFields() {
-    if (!currentUser) return;
-    const amountInput = document.getElementById('sell-offer-amount');
-    const p2pSellInfoText = document.getElementById('p2p-sell-offer-info-text');
-
-    if (amountInput) {
-        amountInput.value = ''; // Clear the input for manual entry
-    }
-
-    if (p2pSellInfoText) {
-        // Use the user's purchase price if available, otherwise use the global default.
-        const basePrice = currentUser.lastSystemPurchaseBaseCoinPrice > 0 ? currentUser.lastSystemPurchaseBaseCoinPrice : DEFAULT_BASE_COIN_PRICE_USD;
-        const sellPrice = basePrice * 2;
-        p2pSellInfoText.textContent = `Enter the amount of COIN to sell. Your price is fixed at 2x your last system purchase price (or a default if none exists), which is ${formatCurrency(sellPrice, "USD")} per COIN.`;
-    }
-}
-
-// MODIFIED: This function now reads the user's input and calculates price based on the new 2x rule, with a fallback.
-function createSellOffer() {
-    if (!currentUser || currentUser.kycStatus !== 'approved') {
-        displayNotification('Your KYC must be approved to create sell offers.', 'warning');
-        return;
-    }
-    // This check is now optional, as we provide a fallback. But it's good practice to keep it.
-    if (!currentUser.hasMadeInitialSystemPurchase && currentUser.coinBalance === 0) {
-        displayNotification('You must have coins to create a sell offer. Please purchase from a System Plan first.', 'warning');
-        return;
-    }
-
-    const amountInput = document.getElementById('sell-offer-amount');
-    const amount = parseInt(amountInput.value);
-
-    if (isNaN(amount) || amount <= 0) {
-        displayNotification('Please enter a valid, positive amount of COINs to sell.', 'error');
-        return;
-    }
-    if (amount > currentUser.coinBalance) {
-        displayNotification('Cannot sell more coins than you have.', 'error');
-        return;
-    }
-
-    // Determine the base price. Use the user's history if it exists, otherwise use the system default.
-    const basePrice = currentUser.lastSystemPurchaseBaseCoinPrice > 0 ? currentUser.lastSystemPurchaseBaseCoinPrice : DEFAULT_BASE_COIN_PRICE_USD;
-    
-    // New Price Calculation: Price is 2x the base price, in USD.
-    const price = basePrice * 2;
-    const currency = 'USD'; // Profit calculation is based on USD, so sale is also in USD.
-
-    const newOffer = {
-        id: generateId(),
-        sellerId: currentUser.id,
-        sellerName: currentUser.name,
-        amount,
-        price,
-        currency,
-        status: 'active',
-        createdAt: new Date().toISOString()
-    };
-    sellOffers.push(newOffer);
-    currentUser.coinBalance -= amount;
-    
-    saveState();
-    
-    // Refresh UI
-    renderAvailableOffers('available-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
-    renderAvailableOffers('system-sale-p2p-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
-    renderMySellOffers();
-    renderUserDashboard(); // To update coin balance card and chart
-    
-    // Clear the input field after successful offer creation
-    amountInput.value = '';
-
-    displayNotification(`Sell offer for ${amount} COIN at ${formatCurrency(price, currency)} per COIN created. Coins are now reserved.`, 'success');
-}
-
-
 function renderMySellOffers() {
     const myOffersListDiv = document.getElementById('my-sell-offers-list');
     if (!myOffersListDiv || !currentUser) return;
 
-    const myOffers = sellOffers.filter(o => o.sellerId === currentUser.id).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const myOffers = sellOffers.filter(o => o.sellerId === currentUser.id && o.status === 'active').sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
     if(myOffers.length === 0) {
-        myOffersListDiv.innerHTML = '<p>You have not created any sell offers yet, or all have been completed/cancelled.</p>';
+        myOffersListDiv.innerHTML = '<p>You have no active sell offers. List a matured asset from the "My Assets" page.</p>';
         return;
     }
     myOffersListDiv.innerHTML = '';
     const table = document.createElement('table');
     table.className = 'data-table';
-    table.innerHTML = `<thead><tr><th>Date</th><th>Amount (COIN)</th><th>Price</th><th>Total Value</th><th>Status</th><th>Action</th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th>Date Listed</th><th>Amount (COIN)</th><th>Price per COIN</th><th>Total Value</th><th>Status</th><th>Action</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector('tbody');
 
     myOffers.forEach(offer => {
         const tr = tbody.insertRow();
-        const displayPrice = formatCurrency(offer.price, offer.currency);
-        const displayTotal = formatCurrency(offer.amount * offer.price, offer.currency);
-        let actionButton = '-';
-        if (offer.status === 'active') {
-            actionButton = `<button onclick="cancelMySellOffer('${offer.id}')" class="danger small">Cancel</button>`;
-        }
-
+        const displayPrice = formatCurrency(offer.adminPrice, offer.adminCurrency);
+        const displayTotal = formatCurrency(offer.amount * offer.adminPrice, offer.adminCurrency);
+        const statusText = "Active on P2P Market";
         tr.innerHTML = `
             <td>${new Date(offer.createdAt || Date.now()).toLocaleDateString()}</td>
-            <td>${offer.amount}</td>
+            <td>${offer.amount.toFixed(2)}</td>
             <td>${displayPrice}</td>
             <td>${displayTotal}</td>
-            <td style="text-transform:capitalize;">${offer.status.replace(/_/g, ' ')}</td>
-            <td>${actionButton}</td>
+            <td>${statusText}</td>
+            <td><button onclick="cancelMySellOffer('${offer.id}')" class="danger small">Cancel</button></td>
         `;
     });
     myOffersListDiv.appendChild(table);
@@ -1053,19 +1046,26 @@ function renderMySellOffers() {
 
 function cancelMySellOffer(offerId) {
     showCustomConfirm(
-        "Are you sure you want to cancel this active sell offer? Coins will be returned to your balance.",
+        "Are you sure you want to cancel this sell offer? The coins will be returned to your liquid balance.",
         () => {
             const offerIndex = sellOffers.findIndex(o => o.id === offerId && o.sellerId === currentUser.id && o.status === 'active');
             if (offerIndex > -1) {
                 const offerToCancel = sellOffers[offerIndex];
+                
+                // Return coins to liquid balance
                 currentUser.coinBalance += offerToCancel.amount;
+
+                const asset = userAssets.find(a => a.id === offerToCancel.assetId);
+                if (asset) {
+                    asset.status = 'credited'; // Revert asset status
+                }
+                
                 sellOffers.splice(offerIndex, 1);
+                
                 saveState();
-                renderMySellOffers();
-                renderAvailableOffers('available-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
-                renderAvailableOffers('system-sale-p2p-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
+
+                displayNotification('Sell offer cancelled and coins returned to liquid balance.', 'info');
                 renderUserDashboard();
-                displayNotification('Sell offer cancelled. Coins returned to balance.', 'info');
             } else {
                 displayNotification('Offer not found or cannot be cancelled.', 'error');
             }
@@ -1076,59 +1076,45 @@ function cancelMySellOffer(offerId) {
     );
 }
 
-function renderAvailableOffers(targetListId = 'available-offers-list', p2pMarketLocked = false) {
-    const offersListDiv = document.getElementById(targetListId);
-    if(!offersListDiv) return;
-    offersListDiv.innerHTML = '';
-    const activeOffers = sellOffers.filter(o => o.status === 'active' && o.sellerId !== currentUser?.id);
-
-    if (activeOffers.length === 0) {
-        offersListDiv.innerHTML = (targetListId === 'system-sale-p2p-offers-list') ? '<p>No P2P offers currently available.</p>' :'<p>No other P2P offers available from other users.</p>';
-        return;
-    }
-
-    activeOffers.forEach(offer => {
-        const offerDiv = document.createElement('div');
-        offerDiv.className = 'offer-item';
-        const displayPrice = formatCurrency(offer.price, offer.currency);
-        const displayTotal = formatCurrency(offer.amount * offer.price, offer.currency);
-        const buyButtonDisabled = p2pMarketLocked ? 'disabled' : '';
-        offerDiv.innerHTML = `
-            <p><strong><i class="fas fa-user-tag"></i> Seller:</strong> ${offer.sellerName}</p>
-            <p><strong><i class="fas fa-coins"></i> Amount:</strong> ${offer.amount} COIN</p>
-            <p><strong><i class="fas fa-tag"></i> Price:</strong> ${displayPrice} per COIN</p>
-            <p><strong><i class="fas fa-file-invoice-dollar"></i> Total:</strong> ${displayTotal}</p>
-            <button onclick="buyFromP2POffer('${offer.id}')" class="accent" ${buyButtonDisabled}><i class="fas fa-shopping-basket"></i> Buy Offer</button>
-        `;
-        offersListDiv.appendChild(offerDiv);
-    });
-}
 function buyFromP2POffer(offerId) {
     if (!currentUser) { displayNotification('Please log in to buy offers.', 'warning'); return; }
     if (currentUser.kycStatus !== 'approved') { displayNotification('Your KYC must be approved to buy P2P offers.', 'warning'); return; }
-    if (!currentUser.hasMadeInitialSystemPurchase) {
-        displayNotification('You must make an initial system coin purchase to participate in P2P market.', 'warning');
+    
+    const isP2PLocked = (currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase);
+    if (isP2PLocked) {
+        displayNotification('You must make an initial purchase from a seller to participate in the P2P market.', 'warning');
         return;
     }
 
     const offer = sellOffers.find(o => o.id === offerId);
-    if (!offer || offer.status !== 'active') { displayNotification('Offer unavailable.', 'error'); renderAvailableOffers('available-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase)); renderAvailableOffers('system-sale-p2p-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase)); return; }
+    if (!offer || offer.status !== 'active') { displayNotification('Offer unavailable.', 'error'); renderMarketplaceItems(); return; }
+
+    const price = offer.adminPrice;
+    const currency = offer.adminCurrency;
+    const totalPrice = offer.amount * price;
 
     const transaction = {
-        id: generateId(), type: 'p2p_purchase', offerId: offer.id,
-        buyerId: currentUser.id, buyerName: currentUser.name,
-        sellerId: offer.sellerId, sellerName: offer.sellerName,
-        amount: offer.amount, totalPrice: offer.amount * offer.price, currency: offer.currency,
-        status: 'awaiting_payment', paymentProofFilename: null, paymentProofDataUrl: null, createdAt: new Date().toISOString()
+        id: generateId(), 
+        type: 'p2p_purchase', 
+        offerId: offer.id,
+        buyerId: currentUser.id, 
+        buyerName: currentUser.name,
+        sellerId: offer.sellerId, 
+        sellerName: offer.sellerName,
+        amount: offer.amount, 
+        totalPrice: totalPrice,
+        currency: currency,
+        status: 'awaiting_payment', 
+        paymentProofFilename: null, 
+        paymentProofDataUrl: null, 
+        createdAt: new Date().toISOString()
     };
-    transactions.push(transaction); offer.status = 'pending_sale';
+    transactions.push(transaction); 
+    offer.status = 'pending_sale';
     saveState();
-    renderUserPendingTransactions();
-    renderAvailableOffers('available-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
-    renderAvailableOffers('system-sale-p2p-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
-    renderMySellOffers();
+    renderUserDashboard();
     displayNotification(`Purchase initiated for offer ID ${offer.id.substring(0,8)}. Please proceed to 'Pending Transactions' to make payment and upload proof.`, 'info');
-    addGlobalNotification(offer.sellerId, "P2P Offer Accepted", `${currentUser.name} wants to buy your offer for ${transaction.amount} COIN. Awaiting their payment.`, 'ud-pending-transactions');
+    addGlobalNotification(offer.sellerId, "P2P Offer Accepted", `${currentUser.name} wants to buy your listed asset. Awaiting their payment.`, 'ud-pending-transactions');
     showUserDashboardSection('ud-pending-transactions', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-pending-transactions"]'));
 }
 
@@ -1176,7 +1162,7 @@ function renderUserPendingTransactions() {
 
             itemDetailsHtml = `
                 <p>Type: P2P ${tx.buyerId === currentUser.id ? 'Purchase from' : 'Sale to'} <strong>${tx.buyerId === currentUser.id ? tx.sellerName : tx.buyerName}</strong></p>
-                <p>Amount: ${tx.amount} COIN</p>
+                <p>Amount: ${tx.amount.toFixed(2)} COIN</p>
                 <p>Total: ${displayTotalP2P}</p>
                 <p>Status: <strong style="text-transform: capitalize;">${tx.status.replace(/_/g, ' ')}</strong></p>
             `;
@@ -1194,7 +1180,7 @@ function renderUserPendingTransactions() {
                 } else if (tx.status === 'payment_proof_submitted') {
                     actionsHtml += `<p><strong>Status:</strong> Proof (${tx.paymentProofFilename || 'N/A'}) submitted. Waiting for ${tx.sellerName} to confirm.</p>`;
                     if (tx.paymentProofDataUrl && tx.paymentProofDataUrl.startsWith('data:image')) {
-                         actionsHtml += `<p><img src="${tx.paymentProofDataUrl}" alt="Proof Preview" class="proof-image"></p>`;
+                         actionsHtml += `<p><img src="${tx.paymentProofDataUrl}" alt="Proof Preview" class="proof-image" style="cursor:pointer;" onclick="openProofViewerModal('${tx.paymentProofDataUrl}', 'Proof for P2P Tx: ${tx.id.substring(0,8)}')"></p>`;
                     }
                 } else if (tx.status === 'disputed') {
                     actionsHtml += `<p style="color:var(--danger-color);"><strong>Status: Disputed.</strong> Awaiting admin review.</p>`;
@@ -1205,7 +1191,7 @@ function renderUserPendingTransactions() {
                         <p><strong>Action:</strong> ${tx.buyerName} submitted payment proof for ${displayTotalP2P}.</p>
                         <p><strong>Proof File: ${tx.paymentProofFilename || 'No file name.'}</strong></p>`;
                     if (tx.paymentProofDataUrl && tx.paymentProofDataUrl.startsWith('data:image')) {
-                         actionsHtml += `<p><img src="${tx.paymentProofDataUrl}" alt="Payment Proof" class="proof-image"></p>`;
+                         actionsHtml += `<p><img src="${tx.paymentProofDataUrl}" alt="Payment Proof" class="proof-image" style="cursor:pointer;" onclick="openProofViewerModal('${tx.paymentProofDataUrl}', 'Proof for P2P Tx: ${tx.id.substring(0,8)}')"></p>`;
                     } else if (tx.paymentProofDataUrl) {
                         actionsHtml += `<p><small>Note: Proof is not an image or could not be previewed.</small></p>`;
                     } else {
@@ -1213,7 +1199,7 @@ function renderUserPendingTransactions() {
                     }
                     actionsHtml += `
                         <div style="padding: 0.5rem; margin-top: 0.5rem; background-color: #FFF9C4; border-left: 3px solid var(--warning-color);">Release coins ONLY if payment is verified in your account!</div>
-                        <button onclick="confirmPaymentAndReleaseCoins('${tx.id}')" class="accent">Confirm Payment & Release P2P Coins</button>
+                        <button onclick="confirmPaymentAndReleaseCoins('${tx.id}')" class="accent">Confirm Payment & Finalize</button>
                          <button onclick="disputeP2PTransaction('${tx.id}')" class="danger small" style="margin-left:10px;">Dispute (Admin Review)</button>
                     `;
                 } else if (tx.status === 'awaiting_payment') {
@@ -1225,12 +1211,12 @@ function renderUserPendingTransactions() {
             }
         } else if (item.type === 'system_plan_purchase') {
             const req = item;
-            itemTitle = `<i class="fas fa-store"></i> System Plan Purchase ID: ${req.id.substring(0,8)}...`;
+            itemTitle = `<i class="fas fa-store"></i> Seller Program Purchase ID: ${req.id.substring(0,8)}...`;
             const displayTotalSys = req.planDetails ? formatCurrency(req.planDetails.cost, req.planDetails.currency) : 'N/A';
-            const planNameDisplay = req.planDetails ? `Plan: <strong>${req.planDetails.name}</strong>` : `Amount Requested: ${req.amountRequested} COIN`;
-            const coinsDisplay = req.planDetails ? `Coins (incl. bonus): ${req.planDetails.totalCoinsToReceive}` : '';
+            const planNameDisplay = req.planDetails ? `Program: <strong>${req.planDetails.name}</strong>` : ``;
+            const coinsDisplay = req.planDetails ? `Total Return: ${req.planDetails.totalReturnCoins.toFixed(2)} COIN` : '';
 
-            let sellerPaymentDetailsSys = "<strong>Seller payment details for this plan:</strong><br>";
+            let sellerPaymentDetailsSys = "<strong>Seller payment details for this program:</strong><br>";
             if(req.planDetails && req.planDetails.paymentInfo) {
                 if (req.planDetails.paymentInfo.bankName && req.planDetails.paymentInfo.bankAccount) {
                     sellerPaymentDetailsSys += `Bank: ${req.planDetails.paymentInfo.bankName}, Acc: ${req.planDetails.paymentInfo.bankAccount}<br>`;
@@ -1252,18 +1238,19 @@ function renderUserPendingTransactions() {
                 <p>Status: <strong style="text-transform: capitalize;">${req.status.replace(/_/g, ' ')}</strong></p>
             `;
 
-            if (req.status === 'awaiting_payment_to_system') {
+            if (req.status === 'awaiting_payment_to_seller') {
                 actionsHtml = `
                     <p><strong>Action:</strong> Pay ${displayTotalSys} to Seller.</p>
                     <div class="payment-details-highlight"><small>${sellerPaymentDetailsSys}</small></div>
-                    <label for="proof-file-system-${req.id}">Upload Payment Proof (System Plan):</label>
+                    <label for="proof-file-system-${req.id}">Upload Payment Proof (Seller Plan):</label>
                     <input type="file" id="proof-file-system-${req.id}" accept="image/*,.pdf">
                     <button onclick="submitSystemPaymentProof('${req.id}')" class="accent">I Paid Seller & Submit Proof</button>
+                    <button onclick="cancelSystemPlanPurchase('${req.id}')" class="danger small" style="margin-left:10px;">Cancel Purchase</button>
                 `;
-            } else if (req.status === 'payment_proof_submitted_to_system') {
-                actionsHtml = `<p><strong>Status:</strong> Proof (${req.paymentProofFilename || 'N/A'}) submitted. Waiting for Seller to confirm and release COINs.</p>`;
+            } else if (req.status === 'payment_proof_submitted_to_seller') {
+                actionsHtml = `<p><strong>Status:</strong> Proof (${req.paymentProofFilename || 'N/A'}) submitted. Waiting for Seller to approve and start your asset program.</p>`;
                  if (req.paymentProofDataUrl && req.paymentProofDataUrl.startsWith('data:image')) {
-                    actionsHtml += `<p><img src="${req.paymentProofDataUrl}" alt="Proof Preview" class="proof-image"></p>`;
+                    actionsHtml += `<p><img src="${req.paymentProofDataUrl}" alt="Proof Preview" class="proof-image" style="cursor:pointer;" onclick="openProofViewerModal('${req.paymentProofDataUrl}', 'Proof for System Program Purchase: ${req.id.substring(0,8)}')"></p>`;
                 }
             } else if (req.status === 'cancelled_by_admin') {
                  actionsHtml = `<p style="padding:0.5rem; color:var(--danger-color); border:1px solid var(--danger-color); border-radius:4px;">Your request was cancelled by the Seller.</p>`;
@@ -1278,7 +1265,6 @@ function renderUserPendingTransactions() {
         pendingListDiv.appendChild(itemDiv);
     });
 }
-
 function submitPaymentProof(transactionId) {
     const tx = transactions.find(t => t.id === transactionId);
     const fileInput = document.getElementById(`proof-file-${tx.id}`);
@@ -1300,34 +1286,62 @@ function submitPaymentProof(transactionId) {
         tx.status = 'payment_proof_submitted';
         saveState(); renderUserPendingTransactions();
         displayNotification(`Payment proof (${tx.paymentProofFilename}) submitted for Tx ID ${tx.id.substring(0,8)}. Waiting for seller confirmation.`, 'success');
-        addGlobalNotification(tx.sellerId, "P2P Payment Proof Submitted", `${tx.buyerName} submitted payment proof for your offer of ${tx.amount} COIN. Please verify and release coins.`, 'ud-pending-transactions');
+        addGlobalNotification(tx.sellerId, "P2P Payment Proof Submitted", `${tx.buyerName} submitted payment proof for your offer. Please verify and finalize the transaction.`, 'ud-pending-transactions');
     } else { displayNotification('Please select a file to upload as proof of payment.', 'error'); return; }
 }
+
 function confirmPaymentAndReleaseCoins(transactionId) {
     const tx = transactions.find(t => t.id === transactionId);
     if (!tx || tx.sellerId !== currentUser.id) { displayNotification('Transaction not found or you are not the seller.', 'error'); return;}
 
     const buyer = users.find(u => u.id === tx.buyerId);
-    const seller = currentUser;
-
     if (!buyer) { displayNotification('Buyer not found. Cannot complete transaction.', 'error'); return; }
+    
+    const seller = currentUser;
+    const offer = sellOffers.find(o => o.id === tx.offerId);
+    if (!offer) { displayNotification('Original P2P offer not found. Transaction cannot be completed.', 'error'); return; }
 
-    buyer.coinBalance += tx.amount;
+    // Seller's payment is external. We now process what the buyer receives.
+    // Buyer gets base coins instantly and a new maturing asset for the profit
+    buyer.coinBalance += offer.amount; // Base coins are liquid immediately
 
-    if (!seller.walletBalance) seller.walletBalance = { USD: 0, ZAR: 0, BTC: 0 };
-    if (seller.walletBalance[tx.currency] === undefined) seller.walletBalance[tx.currency] = 0;
-    seller.walletBalance[tx.currency] = (seller.walletBalance[tx.currency] || 0) + tx.totalPrice;
-
+    const profitCoins = offer.amount * (offer.adminReturnPercentage / 100);
+    const newAssetForBuyer = {
+        id: generateId(),
+        userId: buyer.id,
+        userName: buyer.name,
+        planId: offer.id, // Use offer ID as a reference
+        planName: `${offer.adminPlanName || `P2P Program from ${seller.name}`} (Profit Portion)`,
+        purchaseDate: new Date().toISOString(),
+        maturityDate: new Date(Date.now() + offer.adminMaturityDurationSeconds * 1000).toISOString(),
+        baseCoins: offer.amount, // The base they bought
+        returnPercentage: offer.adminReturnPercentage,
+        totalReturnCoins: profitCoins, // The asset itself only tracks the profit
+        status: 'repackaged_profit_maturing', // Differentiated status for P2P profit
+        origin: { 
+            type: 'p2p_repackaged',
+            cost: offer.amount * offer.adminPrice,
+            currency: offer.adminCurrency,
+            baseCoins: offer.amount,
+            returnPercentage: offer.adminReturnPercentage,
+            maturityDurationSeconds: offer.adminMaturityDurationSeconds
+        }
+    };
+    userAssets.push(newAssetForBuyer);
+    addGlobalNotification(buyer.id, "P2P Program Approved", `Your purchase from ${seller.name} is complete. Base coins are now liquid, and your profit portion is maturing.`, 'ud-my-assets', 'success');
+    
     tx.status = 'completed';
-    const originalOffer = sellOffers.find(o => o.id === tx.offerId);
-    if(originalOffer) originalOffer.status = 'sold';
+    offer.status = 'sold';
+
+    // Mark the original seller's asset as sold
+    const originalAsset = userAssets.find(a => a.id === offer.assetId);
+    if (originalAsset) {
+        originalAsset.status = 'sold';
+    }
 
     saveState();
     renderUserDashboard();
-    renderMySellOffers();
-    renderUserPendingTransactions();
-    displayNotification(`Payment confirmed for Tx ID ${tx.id.substring(0,8)}. ${tx.amount} COIN released to ${buyer.name}. ${formatCurrency(tx.totalPrice, tx.currency)} added to your ${tx.currency} wallet.`, 'success');
-    addGlobalNotification(tx.buyerId, "P2P Coins Received", `${tx.sellerName} confirmed payment and released ${tx.amount} COIN to your account for Tx ID ${tx.id.substring(0,8)}.`, 'ud-p2p-history', 'success');
+    displayNotification(`Payment confirmed. Transaction with ${buyer.name} is complete.`, 'success');
 }
 
 function cancelP2PPurchaseAsBuyer(transactionId) {
@@ -1350,15 +1364,12 @@ function cancelP2PPurchaseAsBuyer(transactionId) {
                 originalOffer.status = 'active'; // Make the original offer active again
             }
             saveState();
-            renderUserPendingTransactions();
-            renderAvailableOffers('available-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
-            renderAvailableOffers('system-sale-p2p-offers-list', !(currentUser && currentUser.hasMadeInitialSystemPurchase));
+            renderUserDashboard();
             displayNotification(`P2P Purchase ${tx.id.substring(0,8)} cancelled.`, 'info');
-            addGlobalNotification(tx.sellerId, 'P2P Purchase Cancelled by Buyer', `Buyer ${currentUser.name} has cancelled their purchase attempt for your offer (Tx ID ${tx.id.substring(0,8)}). Your offer is active again.`, 'ud-p2p-market', 'warning');
+            addGlobalNotification(tx.sellerId, 'P2P Purchase Cancelled by Buyer', `Buyer ${currentUser.name} has cancelled their purchase attempt for your offer. Your offer is active again.`, 'ud-p2p-market', 'warning');
         }, "Cancel Purchase", "Yes, Cancel Purchase", "danger"
     );
 }
-
 
 function disputeP2PTransaction(transactionId) {
     const tx = transactions.find(t => t.id === transactionId);
@@ -1380,7 +1391,7 @@ function disputeP2PTransaction(transactionId) {
             saveState();
             renderUserPendingTransactions();
             displayNotification(`Transaction ${tx.id.substring(0,8)} has been marked as disputed. Admin will review.`, 'info');
-            addGlobalNotification('admin', 'P2P Transaction Disputed', `User ${currentUser.name} disputed P2P Tx ID ${tx.id.substring(0,8)}. Please review.`, 'ad-p2p-transactions');
+            addGlobalNotification('admin', 'P2P Transaction Disputed', `User ${currentUser.name} disputed P2P Tx ID ${tx.id.substring(0,8)}. Please review.`, 'ad-p2p-tx');
             const otherPartyId = tx.sellerId === currentUser.id ? tx.buyerId : tx.sellerId;
             addGlobalNotification(otherPartyId, 'P2P Transaction Disputed', `Transaction ${tx.id.substring(0,8)} has been disputed by the other party. Admin will review.`, 'ud-pending-transactions', 'warning');
         }, "Dispute Transaction", "Yes, Dispute", "danger"
@@ -1399,26 +1410,20 @@ function cancelP2PSaleAsSeller(transactionId) {
     }
 
     showCustomConfirm(
-        "Are you sure you want to cancel this sale? The buyer has not yet paid. Coins will be returned to your active sell offer or balance.",
+        "Are you sure you want to cancel this sale? The buyer has not yet paid. Your P2P offer will be active again.",
         () => {
             tx.status = 'cancelled';
             const originalOffer = sellOffers.find(o => o.id === tx.offerId);
-            if (originalOffer && originalOffer.status === 'pending_sale') { // Ensure it was pending
+            if (originalOffer && originalOffer.status === 'pending_sale') { 
                 originalOffer.status = 'active';
-            } else {
-                currentUser.coinBalance += tx.amount; // Fallback if offer was already active or missing
-                console.warn(`P2P Sale Tx ${tx.id} cancelled by seller. Original offer ${originalOffer ? originalOffer.id : 'N/A'} status: ${originalOffer ? originalOffer.status : 'N/A'}. Returning coins to seller balance as fallback.`);
             }
             saveState();
-            renderUserPendingTransactions();
-            renderMySellOffers();
             renderUserDashboard();
-            displayNotification(`Sale ${tx.id.substring(0,8)} cancelled. Offer relisted or coins returned.`, 'info');
+            displayNotification(`Sale ${tx.id.substring(0,8)} cancelled. Offer relisted.`, 'info');
             addGlobalNotification(tx.buyerId, 'P2P Sale Cancelled', `The seller has cancelled the P2P sale (Tx ID ${tx.id.substring(0,8)}) as payment was not received.`, 'ud-p2p-history', 'warning');
         }, "Cancel Sale", "Yes, Cancel Sale", "danger"
     );
 }
-
 
 function renderP2PTransactionHistory() {
     const historyListDiv = document.getElementById('p2p-history-list');
@@ -1438,12 +1443,13 @@ function renderP2PTransactionHistory() {
                         <td>${tx.id.substring(0,8)}...</td>
                         <td>${type}</td>
                         <td>${counterparty}</td>
-                        <td>${tx.amount}</td>
+                        <td>${tx.amount.toFixed(2)}</td>
                         <td>${displayFiat}</td>
                         <td style="text-transform: capitalize;">${tx.status.replace(/_/g, ' ')}</td>`;
     });
     historyListDiv.appendChild(table);
 }
+
 function exportP2PTransactionHistoryPDF() {
     if (!currentUser) return;
     const { jsPDF } = window.jspdf; const doc = new jsPDF();
@@ -1454,12 +1460,37 @@ function exportP2PTransactionHistoryPDF() {
         const type = tx.buyerId === currentUser.id ? 'Bought' : 'Sold';
         const counterparty = tx.buyerId === currentUser.id ? tx.sellerName : tx.buyerName;
         const displayFiat = formatCurrency(tx.totalPrice, tx.currency);
-        tableRows.push([ new Date(tx.createdAt).toLocaleDateString(), tx.id.substring(0,8), type, counterparty, tx.amount.toString(), displayFiat, tx.status.replace(/_/g, ' ') ]);
+        tableRows.push([ new Date(tx.createdAt).toLocaleDateString(), tx.id.substring(0,8), type, counterparty, tx.amount.toFixed(2).toString(), displayFiat, tx.status.replace(/_/g, ' ') ]);
     });
     doc.autoTable(tableColumn, tableRows, { startY: 20 });
     doc.text(`P2P History for ${currentUser.name}`, 14, 15);
     doc.save(`p2p_history_${currentUser.name.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0,10)}.pdf`);
     displayNotification('P2P history PDF exported.', 'success');
+}
+
+function cancelSystemPlanPurchase(requestId) {
+    const requestIndex = systemPurchaseRequests.findIndex(req => req.id === requestId && req.userId === currentUser.id);
+    if (requestIndex === -1) {
+        displayNotification("Purchase request not found or does not belong to you.", "error");
+        return;
+    }
+    const request = systemPurchaseRequests[requestIndex];
+    if (request.status !== 'awaiting_payment_to_seller') {
+        displayNotification("This purchase can only be cancelled while awaiting payment.", "warning");
+        return;
+    }
+
+    showCustomConfirm(
+        `Are you sure you want to cancel your purchase request for the program "${request.planDetails.name}"?`,
+        () => {
+            systemPurchaseRequests.splice(requestIndex, 1);
+            saveState();
+            renderUserPendingTransactions();
+            displayNotification("Purchase request cancelled successfully.", "info");
+            addGlobalNotification('admin', 'Seller Sale Cancelled', `${currentUser.name} cancelled their purchase request for program '${request.planDetails.name}'.`, 'ad-system-sale-requests', 'warning');
+        },
+        "Cancel Purchase Request", "Yes, Cancel", "danger"
+    );
 }
 
 function submitSystemPaymentProof(requestId) {
@@ -1479,66 +1510,251 @@ function submitSystemPaymentProof(requestId) {
             reader.onerror = function(e) { console.error("File reading error:", e); req.paymentProofDataUrl = null; saveState(); renderUserPendingTransactions();};
             reader.readAsDataURL(file);
         }
-        req.status = 'payment_proof_submitted_to_system';
+        req.status = 'payment_proof_submitted_to_seller';
         saveState(); renderUserPendingTransactions();
-        displayNotification(`Proof (${req.paymentProofFilename}) submitted to Seller for system plan purchase.`, 'success');
-        addGlobalNotification('admin', 'System Sale Proof', `${req.userName} submitted proof for plan '${req.planDetails.name}'.`, 'ad-system-sale-requests');
+        displayNotification(`Proof (${req.paymentProofFilename}) submitted to Seller for program purchase.`, 'success');
+        addGlobalNotification('admin', 'Seller Sale Proof', `${req.userName} submitted proof for program '${req.planDetails.name}'.`, 'ad-system-sale-requests');
     } else { displayNotification('Select a file for proof.', 'error'); return; }
 }
 
-// --- Investment Program (User) ---
-function handleInvestment() {
-     if (!currentUser || currentUser.kycStatus !== 'approved') { displayNotification('Your KYC must be approved to make investments.', 'warning'); return; }
-    const investmentFixedAmount = 1000;
-    if (currentUser.coinBalance < investmentFixedAmount) { displayNotification(`Need ${investmentFixedAmount} COIN to invest. Your balance: ${currentUser.coinBalance}`, 'error'); return; }
+// --- Asset Program (User) ---
+function renderUserAssets() {
+    const assetsListDiv = document.getElementById('user-assets-list');
+    if (!assetsListDiv || !currentUser) return;
 
-    currentUser.coinBalance -= investmentFixedAmount;
-    const investment = {
-        id: generateId(), userId: currentUser.id, userName: currentUser.name,
-        amountInvested: investmentFixedAmount, expectedReturn: 3000,
-        durationDays: 7, startDate: new Date().toISOString(),
-        maturityDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), status: 'active'
-    };
-    investments.push(investment);
-    saveState();
-    renderUserDashboard();
-    displayNotification(`${investmentFixedAmount} COIN invested successfully. Expected return: ${investment.expectedReturn} COIN.`, 'success');
-    addGlobalNotification(currentUser.id, "Investment Started", `${investmentFixedAmount} COIN invested. Matures on ${new Date(investment.maturityDate).toLocaleDateString()}.`, 'ud-investments', 'success');
-}
-function renderActiveInvestments() {
-    const investmentListDiv = document.getElementById('active-investments-list');
-    if(!investmentListDiv || !currentUser) return;
-    investmentListDiv.innerHTML = '';
-    const myInvestments = investments.filter(inv => inv.userId === currentUser.id).sort((a,b) => new Date(b.startDate) - new Date(a.startDate));
-    if (myInvestments.length === 0) { investmentListDiv.innerHTML = '<p>You have no active or past investments.</p>'; return; }
+    const myAssets = userAssets.filter(asset => asset.userId === currentUser.id)
+        .sort((a,b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
 
-    let balanceUpdatedInLoop = false;
-    const now = new Date();
-
-    myInvestments.forEach(inv => {
-        const invDiv = document.createElement('div'); invDiv.className = 'investment-item';
-        const maturity = new Date(inv.maturityDate);
-
-        if (now >= maturity && inv.status === 'active') {
-            currentUser.coinBalance += inv.expectedReturn;
-            inv.status = 'matured_paid';
-            balanceUpdatedInLoop = true;
-            displayNotification(`Investment ${inv.id.substring(0,6)} has matured! ${inv.expectedReturn} COIN added to your balance.`, 'success');
-            addGlobalNotification(currentUser.id, "Investment Matured & Paid", `Investment ID ${inv.id.substring(0,6)} paid ${inv.expectedReturn} COIN.`, 'ud-investments', 'success');
-        }
-        invDiv.innerHTML = `
-            <p><strong>ID:</strong> ${inv.id.substring(0,8)}...</p>
-            <p><strong>Invested:</strong> ${inv.amountInvested} COIN on ${new Date(inv.startDate).toLocaleDateString()}</p>
-            <p><strong>Expected Return:</strong> ${inv.expectedReturn} COIN</p>
-            <p><strong>Matures On:</strong> ${maturity.toLocaleDateString()}</p>
-            <p><strong>Status:</strong> <strong style="text-transform: capitalize;">${inv.status.replace(/_/g, ' ')}</strong> ${inv.status === 'active' && now >= maturity ? '(Matured - Processing Payout)' : (inv.status === 'active' ? `(Active - Matures in ${Math.ceil((maturity - now)/(1000*60*60*24))} days)` : '')}</p>`;
-        investmentListDiv.appendChild(invDiv);
-    });
-    if(balanceUpdatedInLoop) {
-        saveState();
-        document.getElementById('coin-balance').textContent = currentUser.coinBalance;
-        renderUserCoinChart();
+    if (myAssets.length === 0) {
+        assetsListDiv.innerHTML = '<p>You have not purchased any asset programs yet. Visit the "Marketplace" page to start.</p>';
+        return;
     }
+    
+    assetsListDiv.innerHTML = ''; // Clear previous render
+
+    myAssets.forEach(asset => {
+        const assetDiv = document.createElement('div');
+        assetDiv.className = 'asset-item';
+        assetDiv.id = `asset-${asset.id}`;
+
+        let statusHtml = '';
+        const isRepackagedProfit = asset.status === 'repackaged_profit_maturing';
+        
+        if (asset.status === 'maturing' || isRepackagedProfit) {
+            statusHtml = `
+                <p><strong>Status:</strong> ${isRepackagedProfit ? 'Maturing (P2P Profit)' : 'Maturing'}</p>
+                <div class="asset-item-countdown" id="countdown-${asset.id}">Calculating...</div>`;
+        } else if (asset.status === 'credited') {
+            assetDiv.classList.add('matured');
+            statusHtml = `
+                <p style="color: var(--success-color);"><strong>Status: Matured & Credited</strong></p>
+                <button onclick="listAssetOnP2P('${asset.id}')" class="accent"><i class="fas fa-bullhorn"></i> List on P2P Market</button>
+            `;
+        } else if (asset.status === 'listed_on_market') {
+            statusHtml = `<p><strong>Status:</strong> <span style="color: var(--accent-color);">Active on P2P Market</span></p>`;
+        } else if (asset.status === 'sold') {
+            statusHtml = `<p><strong>Status:</strong> <span style="color: var(--success-color);">Sold on P2P Market</span></p>`;
+        }
+
+        const baseCoinInfo = isRepackagedProfit ? 
+            `<p><small><strong>Original Base:</strong> ${asset.baseCoins.toFixed(2)} COIN (instantly liquid)</small></p>` :
+            `<p><strong>Base Coins:</strong> ${asset.baseCoins.toFixed(2)} COIN</p>`;
+        
+        const profitInfo = isRepackagedProfit ?
+            `<p><strong>Maturing Profit:</strong> ${asset.totalReturnCoins.toFixed(2)} COIN</p>` :
+            `<p><strong>Total Return:</strong> ${asset.totalReturnCoins.toFixed(2)} COIN</p>`;
+
+        assetDiv.innerHTML = `
+            <h5><i class="fas fa-project-diagram"></i> ${asset.planName}</h5>
+            <p><strong>Purchased:</strong> ${new Date(asset.purchaseDate).toLocaleDateString()}</p>
+            ${baseCoinInfo}
+            ${profitInfo}
+            ${statusHtml}
+        `;
+        assetsListDiv.appendChild(assetDiv);
+    });
+    
+    startAssetCountdowns();
+}
+
+/**
+ * [FIXED] This function was missing. It creates and manages the countdown timers for maturing assets.
+ * When an asset matures, it updates the user's balance and the asset's status.
+ */
+function startAssetCountdowns() {
+    if (userAssetCountdownInterval) clearInterval(userAssetCountdownInterval);
+    if (!currentUser || currentUser.isAdmin) return;
+
+    const maturingAssets = userAssets.filter(asset => 
+        asset.userId === currentUser.id && 
+        (asset.status === 'maturing' || asset.status === 'repackaged_profit_maturing')
+    );
+
+    if (maturingAssets.length === 0) return;
+
+    userAssetCountdownInterval = setInterval(() => {
+        let needsDashboardUpdate = false;
+        
+        // Use a static list for the loop iteration to avoid issues if the main array is modified
+        const assetsToCheck = userAssets.filter(asset => 
+            asset.userId === currentUser.id && 
+            (asset.status === 'maturing' || asset.status === 'repackaged_profit_maturing')
+        );
+
+        if (assetsToCheck.length === 0) {
+             clearInterval(userAssetCountdownInterval);
+             userAssetCountdownInterval = null;
+             return;
+        }
+
+        assetsToCheck.forEach(asset => {
+            const countdownEl = document.getElementById(`countdown-${asset.id}`);
+            if (!countdownEl) return;
+
+            const maturityDate = new Date(asset.maturityDate);
+            const now = new Date();
+            const timeLeftSeconds = Math.max(0, (maturityDate.getTime() - now.getTime()) / 1000);
+
+            if (timeLeftSeconds > 0) {
+                const days = Math.floor(timeLeftSeconds / 86400);
+                const hours = Math.floor((timeLeftSeconds % 86400) / 3600);
+                const minutes = Math.floor((timeLeftSeconds % 3600) / 60);
+                const seconds = Math.floor(timeLeftSeconds % 60);
+                countdownEl.textContent = `Matures in: ${days}d ${hours}h ${minutes}m ${seconds}s`;
+            } else {
+                // Asset has matured, check status to prevent multiple credits
+                if (asset.status === 'maturing' || asset.status === 'repackaged_profit_maturing') {
+                    currentUser.coinBalance += asset.totalReturnCoins;
+                    asset.status = 'credited';
+                    
+                    const notificationTitle = "Asset Matured!";
+                    const notificationMessage = `Your asset "${asset.planName}" has matured. ${asset.totalReturnCoins.toFixed(2)} COINs have been added to your liquid balance. You can now list it on the P2P market.`;
+                    
+                    addGlobalNotification(currentUser.id, notificationTitle, notificationMessage, 'ud-my-assets', 'success');
+                    displayNotification(notificationMessage, 'success');
+                    
+                    needsDashboardUpdate = true;
+                }
+            }
+        });
+
+        if (needsDashboardUpdate) {
+            saveState();
+            // Re-render the relevant parts of the dashboard to reflect changes
+            renderUserAssets(); // This will update the list and restart the countdowns for any remaining assets
+            renderUserCoinChart();
+            document.getElementById('coin-balance').textContent = currentUser.coinBalance.toFixed(2);
+        }
+    }, 1000);
+}
+
+
+function listAssetOnP2P(assetId) {
+    // 1. Find the TRIGGERING asset. We still need its origin for pricing.
+    const triggeringAsset = userAssets.find(a => a.id === assetId && a.userId === currentUser.id && a.status === 'credited');
+    if (!triggeringAsset) {
+        displayNotification("Could not find a valid credited asset to trigger the sale.", "error");
+        return;
+    }
+
+    // 2. The amount to list is the USER'S ENTIRE LIQUID BALANCE.
+    const amountToList = currentUser.coinBalance;
+
+    // 3. Check if there's anything to list.
+    if (amountToList <= 0) {
+        displayNotification(`You have no liquid COINs to list. Your balance is 0.`, "error");
+        return;
+    }
+
+    // 4. Get the pricing info from the TRIGGERING asset's origin.
+    let originData;
+    if (triggeringAsset.origin && (triggeringAsset.origin.type === 'system' || triggeringAsset.origin.type === 'p2p_repackaged')) {
+        originData = triggeringAsset.origin;
+    }
+
+    if (!originData || originData.cost === undefined || originData.baseCoins === undefined || originData.baseCoins <= 0) {
+        displayNotification("Error: The triggering asset's origin is unclear, cannot determine price. Please contact support.", "error");
+        console.error("Triggering asset missing or invalid origin data:", triggeringAsset);
+        return;
+    }
+    
+    // 5. Calculate pricing for the new offer based on the ENTIRE liquid balance.
+    const costPerBaseCoin = originData.cost / originData.baseCoins;
+    const newOfferTotalValue = amountToList * costPerBaseCoin;
+    const newOfferPricePerCoin = (amountToList > 0) ? newOfferTotalValue / amountToList : 0; // This will be the same as costPerBaseCoin
+    const newOfferCurrency = originData.currency || systemSaleConfig.defaultSystemCurrency;
+    const newOfferReturnPercentage = originData.returnPercentage;
+    const newOfferMaturityDuration = originData.maturityDurationSeconds;
+
+    // 6. Update the confirmation message to be clear and match the new logic.
+    const confirmationMessage = `This will list your <strong>entire liquid balance (${amountToList.toFixed(2)} COINs)</strong> on the P2P market. Your liquid balance will be set to 0 and these coins will be held for the sale.
+        <br><br>The offer will be automatically repackaged for the next buyer with the following terms:
+        <br><strong>Total Value:</strong> ${formatCurrency(newOfferTotalValue, newOfferCurrency)}
+        <br><strong>Price:</strong> ${formatCurrency(newOfferPricePerCoin, newOfferCurrency)} per COIN
+        <br><strong>Return:</strong> ${newOfferReturnPercentage}%
+        <br><strong>Maturity:</strong> ${formatDuration(newOfferMaturityDuration)}
+        <br><br>Do you want to proceed?`;
+
+    // 7. Show the confirmation modal.
+    showCustomConfirm(
+        confirmationMessage,
+        () => {
+            const result = createP2PListingFromLiquidBalance(currentUser, originData);
+            if (result.success) {
+                saveState();
+                renderUserDashboard();
+                displayNotification("Your entire liquid balance has been successfully listed on the P2P market.", "success");
+                addGlobalNotification('admin', 'New P2P Offer', `${currentUser.name} listed their entire liquid balance (${result.offer.amount.toFixed(2)} COINs) for sale.`, 'ad-manage-p2p-offers');
+            } else {
+                displayNotification(result.message, "error");
+            }
+        }, "Confirm P2P Sale", "Yes, List Asset", "accent"
+    );
+}
+
+function createP2PListingFromLiquidBalance(userToList, originData) {
+    const amountToList = userToList.coinBalance;
+    if (amountToList <= 0) {
+        return { success: false, message: "No liquid COINs to list." };
+    }
+
+    if (!originData || originData.cost === undefined || originData.baseCoins === undefined || originData.baseCoins <= 0) {
+        console.error("P2P Listing Error: Invalid origin data provided.", originData);
+        return { success: false, message: "Cannot create P2P offer due to missing or invalid pricing origin data." };
+    }
+    
+    const costPerBaseCoin = originData.cost / originData.baseCoins;
+    const newOfferTotalValue = amountToList * costPerBaseCoin;
+    const newOfferPricePerCoin = (amountToList > 0) ? newOfferTotalValue / amountToList : 0;
+    const newOfferCurrency = originData.currency || systemSaleConfig.defaultSystemCurrency;
+    const newOfferReturnPercentage = originData.returnPercentage;
+    const newOfferMaturityDuration = originData.maturityDurationSeconds;
+
+    const newOffer = {
+        id: generateId(),
+        assetId: originData.id || `admin_credit_${generateId()}`,
+        sellerId: userToList.id,
+        sellerName: userToList.name,
+        amount: amountToList,
+        adminModified: true, 
+        adminPlanName: `P2P Program from ${userToList.name}`,
+        adminPrice: newOfferPricePerCoin,
+        adminCurrency: newOfferCurrency,
+        adminReturnPercentage: newOfferReturnPercentage,
+        adminMaturityDurationSeconds: newOfferMaturityDuration,
+        status: 'active',
+        createdAt: new Date().toISOString()
+    };
+    sellOffers.push(newOffer);
+    userToList.coinBalance = 0; 
+    
+    userAssets.forEach(asset => {
+        if (asset.userId === userToList.id && asset.status === 'credited') {
+            asset.status = 'listed_on_market';
+        }
+    });
+    
+    return { success: true, offer: newOffer };
 }
 
 // --- Withdrawal Feature (User) ---
@@ -1559,7 +1775,7 @@ function populateWithdrawalDestination() {
                 destinationText = `Your ${selectedCurrency} bank details are not set in KYC.`;
             }
         } else if (selectedCurrency === 'BTC') {
-            if (currentUser.kycData.usdtWallet) { // Assuming USDT wallet for BTC withdrawal in this context
+            if (currentUser.kycData.usdtWallet) { 
                 destinationText = `BTC (via USDT Wallet): ${currentUser.kycData.usdtWallet}`;
             } else {
                 destinationText = `Your BTC/USDT wallet is not set in KYC.`;
@@ -1589,7 +1805,6 @@ function handleWithdrawalRequest() {
         return;
     }
 
-    // Check if destination is valid
     let destinationValid = false;
     if (currency === 'USD' || currency === 'ZAR') {
         destinationValid = currentUser.kycData.bankName && currentUser.kycData.bankAccount;
@@ -1603,7 +1818,6 @@ function handleWithdrawalRequest() {
         return;
     }
 
-
     const newRequest = {
         id: generateId(),
         userId: currentUser.id,
@@ -1612,7 +1826,7 @@ function handleWithdrawalRequest() {
         amount: amount,
         currency: currency,
         destination: currency === 'BTC' ? `BTC Wallet: ${currentUser.kycData.usdtWallet}` : `Bank: ${currentUser.kycData.bankName} - Acc: ${currentUser.kycData.bankAccount}`,
-        status: 'pending_admin_approval', // pending_admin_approval, approved, rejected, processed
+        status: 'pending_admin_approval',
         requestedAt: new Date().toISOString(),
         processedAt: null,
         adminNotes: null
@@ -1627,7 +1841,7 @@ function handleWithdrawalRequest() {
 
     document.getElementById('withdraw-amount').value = '';
     renderUserWithdrawalHistory();
-    renderWalletBalances(); // Update wallet display
+    renderWalletBalances(); 
 }
 
 function renderUserWithdrawalHistory() {
@@ -1652,7 +1866,7 @@ function renderUserWithdrawalHistory() {
         const tr = tbody.insertRow();
         let statusDisplay = req.status.replace(/_/g, ' ');
         if (req.status === 'approved') {
-            statusDisplay = 'Approved (Awaiting Payment from Seller)';
+            statusDisplay = 'Approved (Awaiting Offline Payment)';
         }
         tr.innerHTML = `
             <td>${new Date(req.requestedAt).toLocaleDateString()}</td>
@@ -1807,11 +2021,14 @@ function openTicketDetailsModal(ticketId) {
     ticket.messages.forEach(msg => {
         const msgDiv = document.createElement('div');
         let messageClass = 'ticket-message ';
-        if (currentUser.isAdmin) {
-            messageClass += (msg.senderId === 'admin_user' || msg.senderId === currentUser.id) ? 'admin-message' : 'user-message';
+        
+        // [FIXED] Corrected logic for assigning message class
+        if (msg.senderId === 'admin_user') {
+            messageClass += 'admin-message';
         } else {
-            messageClass += msg.senderId === currentUser.id ? 'user-message' : 'admin-message';
+            messageClass += 'user-message';
         }
+
         msgDiv.className = messageClass;
 
         msgDiv.innerHTML = `
@@ -1938,10 +2155,11 @@ function renderAdminDashboard() {
     renderAdminSystemSalePlansList();
     renderAdminUserList();
     renderAdminKycRequests();
-    renderAdminWithdrawalRequests(); // New
+    renderAdminWithdrawalRequests();
     renderAdminSystemPurchaseRequests();
+    renderAdminP2POffers();
     renderAdminP2PTransactions();
-    renderAdminInvestments();
+    renderAdminUserAssets();
     renderAdminSupportTickets();
     updateNotificationBellCount();
 
@@ -1957,39 +2175,37 @@ function renderAdminDashboard() {
 function renderAdminOverviewStats() {
     if (!currentUser || !currentUser.isAdmin) return;
 
-    const elTotalUsers = document.getElementById('admin-stat-total-users');
-    const elTotalCoins = document.getElementById('admin-stat-total-coins');
-    const elActiveInvestmentsValue = document.getElementById('admin-stat-active-investments');
-    const elPendingKyc = document.getElementById('admin-stat-pending-kyc');
-    const elPendingP2P = document.getElementById('admin-stat-pending-p2p');
-    const elPendingSystemPurchases = document.getElementById('admin-stat-pending-system-purchases');
-    const elOpenSupportTickets = document.getElementById('admin-stat-open-support-tickets');
-    const elPendingWithdrawals = document.getElementById('admin-stat-pending-withdrawals'); // New
-
-    if(elTotalUsers) elTotalUsers.textContent = users.length;
-    const totalCoinsInCirculation = users.reduce((sum, user) => sum + (user.coinBalance || 0), 0);
-    if(elTotalCoins) elTotalCoins.textContent = totalCoinsInCirculation;
-    const totalCoinsInActiveInvestments = investments.filter(inv => inv.status === 'active').reduce((sum, inv) => sum + inv.amountInvested, 0);
-    if(elActiveInvestmentsValue) elActiveInvestmentsValue.textContent = totalCoinsInActiveInvestments;
-    if(elPendingKyc) elPendingKyc.textContent = users.filter(u => u.kycStatus === 'pending').length;
-    const pendingP2PTransactions = transactions.filter(tx => tx.status !== 'completed' && tx.status !== 'cancelled' && tx.status !== 'resolved_by_admin' && tx.status !== 'cancelled_by_admin').length;
-    if(elPendingP2P) elPendingP2P.textContent = pendingP2PTransactions;
-    const pendingSystemPurchases = systemPurchaseRequests.filter(req => req.status !== 'completed' && req.status !== 'cancelled_by_admin').length;
-    if(elPendingSystemPurchases) elPendingSystemPurchases.textContent = pendingSystemPurchases;
-    if(elOpenSupportTickets) elOpenSupportTickets.textContent = supportTickets.filter(t => t.status === 'open' || t.status === 'user_reply').length;
-    if(elPendingWithdrawals) elPendingWithdrawals.textContent = withdrawalRequests.filter(req => req.status === 'pending_admin_approval').length; // New
+    document.getElementById('admin-stat-total-users').textContent = users.length;
+    const totalCoinsInMaturingAssets = userAssets.filter(a => a.status === 'maturing' || a.status === 'repackaged_profit_maturing').reduce((sum, a) => sum + a.totalReturnCoins, 0);
+    document.getElementById('admin-stat-total-coins').textContent = totalCoinsInMaturingAssets.toFixed(2);
+    document.getElementById('admin-stat-active-p2p-offers').textContent = sellOffers.filter(o => o.status === 'active').length;
+    document.getElementById('admin-stat-pending-kyc').textContent = users.filter(u => u.kycStatus === 'pending').length;
+    document.getElementById('admin-stat-pending-p2p').textContent = transactions.filter(tx => tx.status !== 'completed' && tx.status !== 'cancelled' && tx.status !== 'resolved_by_admin' && tx.status !== 'cancelled_by_admin').length;
+    document.getElementById('admin-stat-pending-system-purchases').textContent = systemPurchaseRequests.filter(req => req.status !== 'completed' && req.status !== 'cancelled_by_admin').length;
+    document.getElementById('admin-stat-pending-withdrawals').textContent = withdrawalRequests.filter(req => req.status === 'pending_admin_approval').length;
+    document.getElementById('admin-stat-open-support-tickets').textContent = supportTickets.filter(t => t.status === 'open' || t.status === 'user_reply').length;
 }
 
 function loadSystemSaleGeneralSettingsForAdminForm() {
-    const saleDurationEl = document.getElementById('admin-sale-duration');
-    const cooldownDurationEl = document.getElementById('admin-cooldown-duration');
-    const defaultCurrencySelect = document.getElementById('admin-default-currency');
-    const currentDefaultCurrencyDisplay = document.getElementById('current-default-system-currency-display');
+    document.getElementById('admin-sale-duration').value = systemSaleConfig.saleDurationSeconds || 300;
+    document.getElementById('admin-cooldown-duration').value = systemSaleConfig.cooldownDurationSeconds || 60;
+    document.getElementById('admin-default-currency').value = systemSaleConfig.defaultSystemCurrency || "USD";
+    document.getElementById('current-default-system-currency-display').textContent = systemSaleConfig.defaultSystemCurrency || "USD";
 
-    if(saleDurationEl) saleDurationEl.value = systemSaleConfig.saleDurationSeconds || 300;
-    if(cooldownDurationEl) cooldownDurationEl.value = systemSaleConfig.cooldownDurationSeconds || 60;
-    if(defaultCurrencySelect) defaultCurrencySelect.value = systemSaleConfig.defaultSystemCurrency || "USD";
-    if(currentDefaultCurrencyDisplay) currentDefaultCurrencyDisplay.textContent = systemSaleConfig.defaultSystemCurrency || "USD";
+    // P2P Requirement Toggle
+    const p2pToggle = document.getElementById('admin-p2p-access-toggle');
+    const p2pStatus = document.getElementById('admin-p2p-access-status');
+    p2pToggle.checked = systemSaleConfig.p2pRequirementEnabled;
+    p2pStatus.textContent = systemSaleConfig.p2pRequirementEnabled ? 'Enabled (Purchase Required)' : 'Disabled (Open Access)';
+    p2pStatus.style.color = systemSaleConfig.p2pRequirementEnabled ? 'var(--danger-color)' : 'var(--success-color)';
+}
+
+function toggleP2PRequirementDefault() {
+    const p2pToggle = document.getElementById('admin-p2p-access-toggle');
+    systemSaleConfig.p2pRequirementEnabled = p2pToggle.checked;
+    saveState();
+    loadSystemSaleGeneralSettingsForAdminForm(); // Refresh the display
+    displayNotification(`Default P2P access requirement is now ${systemSaleConfig.p2pRequirementEnabled ? 'ENABLED' : 'DISABLED'}.`, 'info');
 }
 
 function saveDefaultSystemCurrency() {
@@ -1999,9 +2215,6 @@ function saveDefaultSystemCurrency() {
         saveState();
         displayNotification(`Default system currency for P2P and Plans set to ${newDefaultCurrency}.`, "success");
         loadSystemSaleGeneralSettingsForAdminForm();
-        if (currentUser && !currentUser.isAdmin && currentViewId === 'user-dashboard-view' && currentDashboardSectionId.user === 'ud-p2p-market') {
-            prefillSellOfferFields();
-        }
     } else {
         displayNotification("Invalid currency selected. Must be USD, ZAR, or BTC.", "error");
     }
@@ -2015,7 +2228,6 @@ function saveSystemSaleTimers() {
         displayNotification("Sale and Cooldown durations must be positive numbers.", "error");
         return;
     }
-
     systemSaleConfig.saleDurationSeconds = saleDuration;
     systemSaleConfig.cooldownDurationSeconds = cooldownDuration;
     saveState();
@@ -2028,6 +2240,7 @@ function saveSystemSaleTimers() {
 function renderAdminSystemSalePlansList() {
     const plansListDiv = document.getElementById('admin-system-sale-plans-list');
     if (!plansListDiv) return;
+
     plansListDiv.innerHTML = '';
 
     if (systemSalePlans.length === 0) {
@@ -2037,7 +2250,7 @@ function renderAdminSystemSalePlansList() {
 
     const table = document.createElement('table');
     table.className = 'data-table';
-    table.innerHTML = `<thead><tr><th>Name</th><th>Cost</th><th>Base Coins</th><th>Bank Name</th><th>Bank Acc.</th><th>BTC Wallet</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th>Name</th><th>Cost</th><th>Base Coins</th><th>Return</th><th>Maturity</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector('tbody');
 
     systemSalePlans.forEach(plan => {
@@ -2046,9 +2259,8 @@ function renderAdminSystemSalePlansList() {
             <td>${plan.name}</td>
             <td>${formatCurrency(plan.cost, plan.currency || systemSaleConfig.defaultSystemCurrency)}</td>
             <td>${plan.coinsAwarded}</td>
-            <td>${plan.planBankName || 'N/A'}</td>
-            <td>${plan.planBankAccount || 'N/A'}</td>
-            <td>${plan.planBtcWallet ? plan.planBtcWallet.substring(0,10)+'...' : 'N/A'}</td>
+            <td>${plan.returnPercentage}%</td>
+            <td>${formatDuration(plan.maturityDurationSeconds)}</td>
             <td><span style="color: ${plan.status === 'active' ? 'var(--success-color)' : 'var(--text-medium)'}; text-transform: capitalize; font-weight: bold;">${plan.status}</span></td>
             <td>
                 <button onclick="populatePlanEditForm('${plan.id}')" class="secondary small">Edit</button>
@@ -2059,46 +2271,54 @@ function renderAdminSystemSalePlansList() {
     });
     plansListDiv.appendChild(table);
 }
-
 function handleAddOrUpdateSystemSalePlan() {
     const name = document.getElementById('plan-name').value.trim();
     const cost = parseFloat(document.getElementById('plan-cost').value);
     const currency = document.getElementById('plan-currency').value;
     const coinsAwarded = parseInt(document.getElementById('plan-coins-awarded').value);
+    const returnPercentage = parseFloat(document.getElementById('plan-return-percentage').value);
+    const maturityValue = parseInt(document.getElementById('plan-maturity-value').value);
+    const maturityUnit = document.getElementById('plan-maturity-unit').value;
     const planBankName = document.getElementById('plan-bank-name').value.trim();
     const planBankAccount = document.getElementById('plan-bank-account').value.trim();
     const planBtcWallet = document.getElementById('plan-btc-wallet').value.trim();
 
-    if (!name || isNaN(cost) || cost <=0 || isNaN(coinsAwarded) || coinsAwarded <=0 || !currency) {
-        displayNotification('Plan Name, valid Cost (>0), Currency, and valid Coins Awarded (>0) are required.', 'error');
+    if (!name || isNaN(cost) || cost <=0 || !currency || isNaN(coinsAwarded) || coinsAwarded <=0 || isNaN(returnPercentage) || returnPercentage < 0 || isNaN(maturityValue) || maturityValue <= 0) {
+        displayNotification('All fields (Name, Cost, Currency, Base Coins, Return %, Maturity) must be valid positive numbers.', 'error');
         return;
     }
-    if (!planBankName && !planBankAccount && !planBtcWallet) {
-        displayNotification('Info: No payment details (Bank or BTC Wallet) provided for this plan. Ensure users know how to pay.', 'info');
+
+    let maturityDurationSeconds = 0;
+    switch (maturityUnit) {
+        case 'Minutes':
+            maturityDurationSeconds = maturityValue * 60;
+            break;
+        case 'Hours':
+            maturityDurationSeconds = maturityValue * 3600;
+            break;
+        case 'Days':
+        default:
+            maturityDurationSeconds = maturityValue * 86400;
+            break;
     }
+
+    const planData = {
+        name, cost, currency, coinsAwarded, returnPercentage, maturityDurationSeconds,
+        planBankName, planBankAccount, planBtcWallet
+    };
 
     if (currentEditingPlanId) {
         const planIndex = systemSalePlans.findIndex(p => p.id === currentEditingPlanId);
         if (planIndex > -1) {
-            systemSalePlans[planIndex] = {
-                ...systemSalePlans[planIndex],
-                name, cost, currency, coinsAwarded,
-                planBankName, planBankAccount, planBtcWallet
-            };
+            systemSalePlans[planIndex] = { ...systemSalePlans[planIndex], ...planData };
             displayNotification(`Plan "${name}" updated successfully.`, 'success');
         } else {
-            displayNotification("Error: Plan to update not found. Please refresh and try again.", "error");
-            currentEditingPlanId = null;
+            displayNotification("Error: Plan to update not found.", "error");
         }
     } else {
-        const newPlan = {
-            id: generateId(), name, cost, currency,
-            coinsAwarded,
-            planBankName, planBankAccount, planBtcWallet,
-            status: 'inactive'
-        };
+        const newPlan = { id: generateId(), ...planData, status: 'inactive' };
         systemSalePlans.push(newPlan);
-        displayNotification(`Plan "${name}" added successfully. Remember to activate it to make it available to users.`, 'success');
+        displayNotification(`Plan "${name}" added. Remember to activate it.`, 'success');
     }
 
     saveState();
@@ -2108,34 +2328,31 @@ function handleAddOrUpdateSystemSalePlan() {
 
 function populatePlanEditForm(planId) {
     const plan = systemSalePlans.find(p => p.id === planId);
-    if (!plan) {
-        displayNotification("Could not find the selected plan to edit. It might have been deleted.", "error");
-        clearPlanEditForm();
-        return;
-    }
+    if (!plan) { displayNotification("Could not find plan to edit.", "error"); return; }
 
     currentEditingPlanId = plan.id;
     document.getElementById('plan-name').value = plan.name;
     document.getElementById('plan-cost').value = plan.cost;
     document.getElementById('plan-currency').value = plan.currency || systemSaleConfig.defaultSystemCurrency;
     document.getElementById('plan-coins-awarded').value = plan.coinsAwarded;
+    document.getElementById('plan-return-percentage').value = plan.returnPercentage;
+    
+    const duration = deconstructDuration(plan.maturityDurationSeconds);
+    document.getElementById('plan-maturity-value').value = duration.value;
+    document.getElementById('plan-maturity-unit').value = duration.unit;
+
     document.getElementById('plan-bank-name').value = plan.planBankName || '';
     document.getElementById('plan-bank-account').value = plan.planBankAccount || '';
     document.getElementById('plan-btc-wallet').value = plan.planBtcWallet || '';
 
-    const addPlanButton = document.getElementById('add-plan-button');
-    if (addPlanButton) addPlanButton.innerHTML = '<i class="fas fa-save"></i> Update Plan';
-
-    const cancelEditButton = document.getElementById('cancel-edit-plan-button');
-    if (cancelEditButton) cancelEditButton.classList.remove('hidden');
-
-    const editingPlanIdElement = document.getElementById('editing-plan-id');
-    const editingPlanIdSpan = document.querySelector('#editing-plan-id span');
-    if (editingPlanIdElement && editingPlanIdSpan) {
-        editingPlanIdSpan.textContent = planId.substring(0,8)+"...";
-        editingPlanIdElement.classList.remove('hidden');
+    document.getElementById('add-plan-button').innerHTML = '<i class="fas fa-save"></i> Update Plan';
+    document.getElementById('cancel-edit-plan-button').classList.remove('hidden');
+    
+    const editingIdEl = document.querySelector('#editing-plan-id span');
+    if(editingIdEl) {
+        editingIdEl.textContent = planId.substring(0,8)+"...";
+        editingIdEl.parentElement.classList.remove('hidden');
     }
-
     document.getElementById('plan-name').focus();
 }
 
@@ -2143,15 +2360,9 @@ function clearPlanEditForm() {
     currentEditingPlanId = null;
     document.getElementById('plan-form').reset();
     document.getElementById('plan-currency').value = systemSaleConfig.defaultSystemCurrency || 'USD';
-
-    const addPlanButton = document.getElementById('add-plan-button');
-    if (addPlanButton) addPlanButton.innerHTML = '<i class="fas fa-plus"></i> Add Plan';
-
-    const cancelEditButton = document.getElementById('cancel-edit-plan-button');
-    if (cancelEditButton) cancelEditButton.classList.add('hidden');
-
-    const editingPlanIdElement = document.getElementById('editing-plan-id');
-    if (editingPlanIdElement) editingPlanIdElement.classList.add('hidden');
+    document.getElementById('add-plan-button').innerHTML = '<i class="fas fa-plus"></i> Add Plan';
+    document.getElementById('cancel-edit-plan-button').classList.add('hidden');
+    document.getElementById('editing-plan-id').classList.add('hidden');
 }
 
 function toggleSystemSalePlanStatus(planId) {
@@ -2168,55 +2379,45 @@ function toggleSystemSalePlanStatus(planId) {
 
 function deleteSystemSalePlan(planId) {
     const planToDelete = systemSalePlans.find(p=>p.id===planId);
-    if (!planToDelete) {
-        displayNotification("Plan not found, cannot delete.", "error");
-        return;
-    }
+    if (!planToDelete) { displayNotification("Plan not found.", "error"); return; }
 
     showCustomConfirm(
-        `Are you sure you want to permanently delete the plan "${planToDelete.name}"? This action cannot be undone.`,
+        `Are you sure you want to permanently delete the plan "${planToDelete.name}"?`,
         () => {
-            const planIndex = systemSalePlans.findIndex(p => p.id === planId);
-            if (planIndex > -1) {
-                systemSalePlans.splice(planIndex, 1);
-                saveState();
-                renderAdminSystemSalePlansList();
-                if(currentEditingPlanId === planId) clearPlanEditForm();
-                displayNotification(`Plan "${planToDelete.name}" deleted successfully.`, 'success');
-            }
-        },
-        "Confirm Plan Deletion", "Yes, Delete Plan", "danger"
+            systemSalePlans = systemSalePlans.filter(p => p.id !== planId);
+            saveState();
+            renderAdminSystemSalePlansList();
+            if(currentEditingPlanId === planId) clearPlanEditForm();
+            displayNotification(`Plan "${planToDelete.name}" deleted successfully.`, 'success');
+        }, "Confirm Plan Deletion", "Yes, Delete Plan", "danger"
     );
 }
 
 function clearSystemSaleRequestsLogs() {
     showCustomConfirm(
-        "Are you sure you want to clear ALL System Sale Request logs (completed, pending, cancelled)? This action cannot be undone and will remove all historical data for these requests.",
+        "Are you sure you want to clear ALL Seller Sale Request logs?",
         () => {
             systemPurchaseRequests = [];
             saveState();
             renderAdminSystemPurchaseRequests();
             renderAdminOverviewStats();
-            displayNotification("All System Sale Request logs have been cleared.", "success");
-        }, "Clear All System Sale Logs", "Confirm Clear All", "danger"
+            displayNotification("All Seller Sale Request logs have been cleared.", "success");
+        }, "Clear All Seller Sale Logs", "Confirm Clear All", "danger"
     );
 }
 function clearP2PTransactionLogs() {
      showCustomConfirm(
-        "Are you sure you want to clear ALL P2P Transaction logs (completed, pending, disputed, etc.)? This action cannot be undone and will remove all historical P2P data.",
+        "Are you sure you want to clear ALL P2P Transaction logs?",
         () => {
             transactions = [];
-            sellOffers = sellOffers.map(offer => {
-                if (offer.status === 'pending_sale' || offer.status === 'sold') {
-                    return null;
-                }
-                return offer;
-            }).filter(offer => offer !== null);
-
+            // Reset any offers that were pending sale
+            sellOffers.forEach(offer => {
+                if (offer.status === 'pending_sale') offer.status = 'active';
+            });
             saveState();
             renderAdminP2PTransactions();
             renderAdminOverviewStats();
-            displayNotification("All P2P Transaction logs (and related offer statuses) have been cleared/reset.", "success");
+            displayNotification("All P2P Transaction logs have been cleared.", "success");
         }, "Clear All P2P Logs", "Confirm Clear All", "danger"
     );
 }
@@ -2229,51 +2430,37 @@ function renderAdminSystemPurchaseRequests() {
     const allRequests = [...systemPurchaseRequests].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     if (allRequests.length === 0) {
-        listDiv.innerHTML = '<p>No system purchase requests from users have been made yet.</p>';
+        listDiv.innerHTML = '<p>No seller purchase requests from users have been made yet.</p>';
         return;
     }
 
     const table = document.createElement('table');
     table.className = 'data-table';
-    table.innerHTML = `<thead><tr><th>Date</th><th>User</th><th>Plan/Details</th><th>Cost</th><th>Coins (Base+Bonus)</th><th>Status</th><th>Proof</th><th>Action</th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th>Date</th><th>User</th><th>Program</th><th>Cost</th><th>Total Return</th><th>Status</th><th>Proof</th><th>Action</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector('tbody');
 
     allRequests.forEach(req => {
         const tr = tbody.insertRow();
-        let planInfo = "Direct Purchase (Legacy)";
-        let costInfo = formatCurrency(req.totalPrice, req.currency);
-        let coinsInfo = `${req.amount || 'N/A'}`;
+        let planInfo = `<strong>${req.planDetails.name}</strong>`;
+        let costInfo = formatCurrency(req.planDetails.cost, req.planDetails.currency);
+        let coinsInfo = `${req.planDetails.totalReturnCoins.toFixed(2)}`;
 
-        if(req.planDetails){
-            planInfo = `<strong>${req.planDetails.name}</strong> (Plan ID: ${req.planDetails.id.substring(0,6)})`;
-            costInfo = formatCurrency(req.planDetails.cost, req.planDetails.currency);
-            coinsInfo = `${req.planDetails.coinsAwarded} + ${req.planDetails.bonusCoins} = ${req.planDetails.totalCoinsToReceive}`;
-        }
-
-        let proofDisplay = req.paymentProofFilename || 'No Proof Submitted';
+        let proofDisplay = 'No Proof';
         if (req.paymentProofDataUrl && req.paymentProofDataUrl.startsWith('data:image')) {
-            proofDisplay = `<a href="${req.paymentProofDataUrl}" target="_blank" title="View Proof Image">${req.paymentProofFilename || 'View Image'} <img src="${req.paymentProofDataUrl}" alt="Proof" style="max-height:30px; vertical-align:middle;"></a>`;
-        } else if (req.paymentProofDataUrl && req.paymentProofDataUrl.startsWith('data:application/pdf')) {
-             proofDisplay = `<a href="${req.paymentProofDataUrl}" target="_blank" title="View Proof PDF">${req.paymentProofFilename || 'View PDF'}</a>`;
-        } else if (req.paymentProofDataUrl) {
-             proofDisplay = `<a href="#" onclick="alert('Proof data available but not a direct image/PDF preview. Filename: ${req.paymentProofFilename}'); return false;" title="Proof Data available">${req.paymentProofFilename}</a>`;
+            proofDisplay = `<button class="secondary small" onclick="openProofViewerModal('${req.paymentProofDataUrl}', 'Proof for ${req.userName} - ${req.planDetails.name}')">View Proof</button>`;
+        } else if (req.paymentProofDataUrl) { // Handle other file types or links
+             proofDisplay = `<a href="${req.paymentProofDataUrl}" target="_blank" title="View Proof">${req.paymentProofFilename || 'View File'}</a>`;
+        } else if (req.paymentProofFilename) {
+            proofDisplay = req.paymentProofFilename;
         }
 
         let actionButtons = '';
-        if (req.status === 'payment_proof_submitted_to_system') {
-            actionButtons = `
-                <button onclick="approveSystemCoinPurchase('${req.id}')" class="accent small" style="margin-bottom: 5px;">Approve Purchase</button>
-                <button onclick="rejectSystemCoinPurchase('${req.id}')" class="danger small">Reject Purchase</button>
-            `;
-        } else if (req.status === 'awaiting_payment_to_system') {
-             actionButtons = `
-                <button onclick="approveSystemCoinPurchase('${req.id}')" class="secondary small" style="margin-bottom: 5px;" title="Manual approval (e.g., payment confirmed offline). Use with caution.">Approve (Manual)</button>
-                <button onclick="rejectSystemCoinPurchase('${req.id}')" class="danger small">Reject/Cancel Request</button>
-            `;
-        } else if (req.status === 'completed' || req.status === 'cancelled_by_admin') {
-            actionButtons = `Processed (${req.status.replace(/_/g, ' ')})`;
+        if (req.status === 'payment_proof_submitted_to_seller') {
+            actionButtons = `<button onclick="approveSystemCoinPurchase('${req.id}')" class="accent small">Approve</button> <button onclick="rejectSystemCoinPurchase('${req.id}')" class="danger small">Reject</button>`;
+        } else if (req.status === 'awaiting_payment_to_seller') {
+             actionButtons = `<button onclick="approveSystemCoinPurchase('${req.id}')" class="secondary small" title="Manual approval">Manual Approve</button> <button onclick="rejectSystemCoinPurchase('${req.id}')" class="danger small">Reject</button>`;
         } else {
-            actionButtons = 'N/A (Unknown Status)';
+            actionButtons = `Processed (${req.status.replace(/_/g, ' ')})`;
         }
 
         tr.innerHTML = `
@@ -2293,25 +2480,36 @@ function renderAdminSystemPurchaseRequests() {
 function approveSystemCoinPurchase(requestId) {
     const request = systemPurchaseRequests.find(req => req.id === requestId);
     if (!request) { displayNotification("Request not found", "error"); return; }
-
     const user = users.find(u => u.id === request.userId);
     if (!user) { displayNotification("User not found for this request", "error"); return; }
 
-    let coinsToCredit = 0;
-    if (request.planDetails) {
-        coinsToCredit = request.planDetails.totalCoinsToReceive;
-        // This logic ensures the price is set even if the plan is not in USD
-        if (request.planDetails.currency === "USD") {
-            if (typeof request.planDetails.cost === 'number' && typeof request.planDetails.coinsAwarded === 'number' && request.planDetails.coinsAwarded > 0) {
-                user.lastSystemPurchaseBaseCoinPrice = request.planDetails.cost / request.planDetails.coinsAwarded;
-            }
+    const plan = systemSalePlans.find(p => p.id === request.planDetails.id);
+    if (!plan) { displayNotification("Original plan not found, cannot create asset.", "error"); return; }
+    
+    const newAsset = {
+        id: generateId(),
+        userId: user.id,
+        userName: user.name,
+        planId: plan.id,
+        planName: plan.name,
+        purchaseDate: new Date().toISOString(),
+        maturityDate: new Date(Date.now() + plan.maturityDurationSeconds * 1000).toISOString(),
+        baseCoins: plan.coinsAwarded,
+        returnPercentage: plan.returnPercentage,
+        totalReturnCoins: request.planDetails.totalReturnCoins,
+        status: 'maturing',
+        origin: {
+            type: 'system',
+            planId: plan.id,
+            cost: plan.cost,
+            currency: plan.currency,
+            baseCoins: plan.coinsAwarded,
+            returnPercentage: plan.returnPercentage,
+            maturityDurationSeconds: plan.maturityDurationSeconds
         }
-        user.lastSystemPurchaseBonusPercentage = COIN_SALE_BONUS_PERCENTAGE;
-    } else {
-        coinsToCredit = request.amount || 0;
-    }
+    };
+    userAssets.push(newAsset);
 
-    user.coinBalance += coinsToCredit;
     request.status = 'completed';
 
     if (!user.hasMadeInitialSystemPurchase) {
@@ -2321,50 +2519,53 @@ function approveSystemCoinPurchase(requestId) {
     saveState();
     renderAdminSystemPurchaseRequests();
     renderAdminOverviewStats();
-    displayNotification(`Approved ${coinsToCredit} COINs for ${user.name}.`, "success");
-    addGlobalNotification(user.id, "System Purchase Approved", `Your purchase of ${request.planDetails ? request.planDetails.name : 'coins'} for ${coinsToCredit} COINs was approved.`, 'ud-overview', 'success');
-
+    displayNotification(`Approved asset program for ${user.name}. Asset is now maturing.`, "success");
+    addGlobalNotification(user.id, "Asset Program Approved", `Your purchase of "${plan.name}" was approved. It is now maturing in "My Assets".`, 'ud-my-assets', 'success');
 }
 
 function rejectSystemCoinPurchase(requestId) {
     const request = systemPurchaseRequests.find(req => req.id === requestId);
-    if (!request) {
-        displayNotification("Request not found, cannot reject.", "error");
-        return;
-    }
-    if (request.status === 'completed' || request.status === 'cancelled_by_admin') {
-        displayNotification("This request has already been processed.", "info");
-        return;
-    }
+    if (!request) { displayNotification("Request not found.", "error"); return; }
 
     showCustomConfirm(
-        `Are you sure you want to reject this system coin purchase request for ${request.userName} (Plan: ${request.planDetails ? request.planDetails.name : 'N/A'})? The user will be notified.`,
+        `Are you sure you want to reject this purchase request for ${request.userName}?`,
         () => {
             request.status = 'cancelled_by_admin';
             saveState();
             renderAdminSystemPurchaseRequests();
             renderAdminOverviewStats();
-            displayNotification(`Purchase request ID ${request.id.substring(0,8)} for ${request.userName} has been rejected.`, 'info');
-            addGlobalNotification(request.userId, "System Purchase Rejected", `Your purchase request for ${request.planDetails ? `plan '${request.planDetails.name}'` : 'coins'} was rejected by the administrator. Please contact support if you have questions.`, 'ud-system-sale', 'error');
+            displayNotification(`Purchase request for ${request.userName} has been rejected.`, 'info');
+            addGlobalNotification(request.userId, "Purchase Rejected", `Your purchase request for "${request.planDetails.name}" was rejected by the administrator.`, 'ud-system-sale', 'error');
         }, "Reject Purchase Request", "Confirm Rejection", "danger"
     );
 }
 
 function renderAdminUserList() {
     const userListArea = document.getElementById('admin-user-list-area');
-    if(!userListArea) return;
+    if (!userListArea) return;
+    
     userListArea.innerHTML = '';
+    
     const searchInput = document.getElementById('admin-user-search');
     const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
 
-    const filteredUsers = users.filter(user =>
+    const filteredUsers = searchTerm ? users.filter(user =>
         user.name.toLowerCase().includes(searchTerm) ||
         user.email.toLowerCase().includes(searchTerm) ||
         user.id.toLowerCase().includes(searchTerm)
-    );
+    ) : users;
 
-    const table = document.createElement('table'); table.className = 'data-table';
-    table.innerHTML = `<thead><tr><th>Name (ID)</th><th>Email</th><th>COIN Bal.</th><th>KYC</th><th>Initial Purchase</th><th>Status</th><th>Actions</th><th>Adjust Bal.</th></tr></thead><tbody></tbody>`;
+    if (filteredUsers.length === 0) {
+        userListArea.innerHTML = `<p>No users match your search criteria "${searchTerm}".</p>`;
+        if (users.length === 0) {
+             userListArea.innerHTML = '<p>No users have registered on the platform yet.</p>';
+        }
+        return;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    table.innerHTML = `<thead><tr><th>Name (ID)</th><th>Email</th><th>Liquid COINs</th><th>KYC</th><th>Status</th><th>Actions</th><th>Adjust Bal.</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector('tbody');
 
     filteredUsers.forEach(user => {
@@ -2372,23 +2573,22 @@ function renderAdminUserList() {
         tr.innerHTML = `
             <td>${user.name} <small>(${user.id.substring(0,6)})</small></td>
             <td>${user.email}</td>
-            <td>${user.coinBalance}</td>
+            <td>${user.coinBalance.toFixed(2)}</td>
             <td style="text-transform:capitalize;">${user.kycStatus || 'None'}</td>
-            <td>${user.hasMadeInitialSystemPurchase ? 'Yes' : 'No'}</td>
             <td><span style="color: ${user.status === 'active' ? 'var(--success-color)' : 'var(--danger-color)'}; text-transform: capitalize; font-weight: bold;">${user.status}</span></td>
             <td>
-                <button onclick="openAdminEditKycModal('${user.id}')" class="secondary small" title="Edit User KYC Details and Status">Edit KYC</button>
+                <button onclick="openAdminEditKycModal('${user.id}')" class="secondary small">Edit KYC</button>
                 <button onclick="toggleBlockUser('${user.id}')" class="${user.status === 'active' ? 'secondary' : 'accent'} small">${user.status === 'active' ? 'Block' : 'Unblock'}</button>
-                <button onclick="deleteUser('${user.id}')" class="danger small" title="Permanently Delete User">Delete User</button>
+                <button onclick="deleteUser('${user.id}')" class="danger small">Delete</button>
             </td>
             <td>
                 <div style="display:flex; gap: 5px; align-items: center;">
                     <input type="number" id="adj-bal-${user.id}" style="width: 70px; padding: 0.3rem; margin-bottom:0;" placeholder="Set">
-                    <button onclick="adminAdjustUserBalance('${user.id}')" class="accent small" style="padding: 0.3rem 0.5rem;" title="Set User Coin Balance">Set</button>
+                    <button onclick="adminAdjustUserBalance('${user.id}')" class="accent small" style="padding: 0.3rem 0.5rem;" title="Set Liquid Coin Balance">Set</button>
                 </div>
             </td>`;
     });
-    if (filteredUsers.length === 0) { userListArea.innerHTML = `<p>No users match your search criteria "${searchTerm}".</p>`; } else { userListArea.appendChild(table); }
+    userListArea.appendChild(table);
 }
 
 function adminAdjustUserBalance(userId) {
@@ -2401,29 +2601,71 @@ function adminAdjustUserBalance(userId) {
     if (!amountInput) return;
 
     const newBalanceStr = amountInput.value;
-    if (newBalanceStr === "") {
+    if (newBalanceStr.trim() === '') {
+        displayNotification('Please enter a balance amount.', 'error');
         return;
     }
-    const newBalance = parseFloat(newBalanceStr);
 
+    const newBalance = parseFloat(newBalanceStr);
 
     if (isNaN(newBalance) || newBalance < 0) {
         displayNotification('Invalid balance amount. Must be a non-negative number.', 'error');
-        amountInput.value = user.coinBalance;
         return;
     }
+    
     showCustomConfirm(
-        `Are you sure you want to set ${user.name}'s COIN balance to ${newBalance}? Current balance: ${user.coinBalance}. This is a direct modification.`,
+        `This will set <strong>${user.name}'s</strong> liquid COIN balance to <strong>${newBalance.toFixed(2)}</strong>. This will then be AUTOMATICALLY listed on the P2P market. Proceed?`,
         () => {
-            const oldBalance = user.coinBalance;
+            // Set balance first
             user.coinBalance = newBalance;
-            saveState();
-            renderAdminUserList();
-            renderAdminOverviewStats();
-            displayNotification(`${user.name}'s balance changed from ${oldBalance} to ${newBalance} COIN.`, 'success');
-            addGlobalNotification(user.id, "Balance Adjusted by Admin", `Your COIN balance was adjusted by an administrator to ${newBalance}. Old balance: ${oldBalance}.`, '#', 'warning');
-            amountInput.value = '';
-        }, "Confirm Balance Adjustment", "Set Balance", "accent"
+            
+            if (newBalance <= 0) {
+                saveState();
+                renderAdminUserList();
+                displayNotification(`${user.name}'s balance set to ${newBalance.toFixed(2)}. No P2P offer created as balance is zero.`, 'info');
+                return;
+            }
+
+            // Find origin data for pricing the P2P offer
+            const userAssetsSorted = userAssets
+                .filter(a => a.userId === user.id && a.origin)
+                .sort((a,b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
+            let originData = userAssetsSorted.length > 0 ? userAssetsSorted[0].origin : null;
+
+            if (!originData) {
+                const firstSystemPlan = systemSalePlans.find(p => p.status === 'active') || (systemSalePlans.length > 0 ? systemSalePlans[0] : null);
+                if (firstSystemPlan) {
+                    originData = {
+                        id: firstSystemPlan.id,
+                        planId: firstSystemPlan.id,
+                        type: 'system',
+                        cost: firstSystemPlan.cost,
+                        currency: firstSystemPlan.currency,
+                        baseCoins: firstSystemPlan.coinsAwarded,
+                        returnPercentage: firstSystemPlan.returnPercentage,
+                        maturityDurationSeconds: firstSystemPlan.maturityDurationSeconds
+                    };
+                }
+            }
+
+            if (originData) {
+                const result = createP2PListingFromLiquidBalance(user, originData);
+                if (result.success) {
+                    saveState();
+                    renderAdminUserList();
+                    displayNotification(`${user.name}'s balance was set and automatically listed on P2P market.`, 'success');
+                    addGlobalNotification(user.id, "Balance Credited & Listed", `Admin credited your account, and your balance of ${result.offer.amount.toFixed(2)} COINs has been placed on the P2P market.`, 'ud-my-assets', 'success');
+                } else {
+                    saveState(); // Still save the balance change
+                    renderAdminUserList();
+                    displayNotification(`Balance set, but P2P listing failed: ${result.message}`, 'error');
+                }
+            } else {
+                saveState(); // Still save the balance change
+                renderAdminUserList();
+                displayNotification('Balance set, but could not list on P2P: No suitable pricing origin (user asset or system plan) found.', 'error');
+            }
+        }, "Confirm Balance Adjustment & P2P Listing", "Confirm & List", "accent"
     );
 }
 
@@ -2433,52 +2675,39 @@ function toggleBlockUser(userId) {
         const newStatus = user.status === 'active' ? 'blocked' : 'active';
         const actionText = newStatus === 'blocked' ? 'block' : 'unblock';
         showCustomConfirm(
-            `Are you sure you want to ${actionText} user ${user.name} (${user.email})?`,
+            `Are you sure you want to ${actionText} user ${user.name}?`,
             () => {
                 user.status = newStatus;
                 saveState();
                 renderAdminUserList();
                 displayNotification(`User ${user.name} is now ${newStatus}.`, 'info');
-                addGlobalNotification(user.id, "Account Status Changed", `Your account status has been changed to: ${newStatus} by an administrator.`, '#', newStatus === 'blocked' ? 'error' : 'success');
+                addGlobalNotification(user.id, "Account Status Changed", `Your account status changed to: ${newStatus}.`, '#', newStatus === 'blocked' ? 'error' : 'success');
             },
             `${actionText.charAt(0).toUpperCase() + actionText.slice(1)} User`,
-            `Yes, ${actionText.charAt(0).toUpperCase() + actionText.slice(1)}`,
+            `Yes, ${actionText}`,
             newStatus === 'blocked' ? "danger" : "accent"
         );
     }
 }
 function deleteUser(userId) {
     const userToDelete = users.find(u => u.id === userId);
-    if (!userToDelete) {
-        displayNotification("User not found.", "error");
-        return;
-    }
+    if (!userToDelete) { displayNotification("User not found.", "error"); return; }
     showCustomConfirm(
-        `PERMANENTLY DELETE user ${userToDelete.name} (${userToDelete.email})? This is irreversible and will remove all their data (transactions, offers, tickets, investments, withdrawal requests).`,
+        `PERMANENTLY DELETE user ${userToDelete.name}? This is irreversible and will remove all their data (transactions, offers, assets, tickets, etc.).`,
         () => {
-            const userIndex = users.findIndex(u => u.id === userId);
-            if (userIndex > -1) {
-                const userName = users[userIndex].name;
-                users.splice(userIndex, 1);
-                transactions = transactions.filter(tx => tx.buyerId !== userId && tx.sellerId !== userId);
-                sellOffers = sellOffers.filter(offer => offer.sellerId !== userId);
-                investments = investments.filter(inv => inv.userId !== userId);
-                supportTickets = supportTickets.filter(ticket => ticket.userId !== userId);
-                systemPurchaseRequests = systemPurchaseRequests.filter(req => req.userId !== userId);
-                withdrawalRequests = withdrawalRequests.filter(req => req.userId !== userId); // New
-                globalNotifications = globalNotifications.filter(n => n.target !== userId);
+            users = users.filter(u => u.id !== userId);
+            transactions = transactions.filter(tx => tx.buyerId !== userId && tx.sellerId !== userId);
+            sellOffers = sellOffers.filter(offer => offer.sellerId !== userId);
+            userAssets = userAssets.filter(inv => inv.userId !== userId);
+            supportTickets = supportTickets.filter(ticket => ticket.userId !== userId);
+            systemPurchaseRequests = systemPurchaseRequests.filter(req => req.userId !== userId);
+            withdrawalRequests = withdrawalRequests.filter(req => req.userId !== userId);
+            globalNotifications = globalNotifications.filter(n => n.target !== userId);
 
-                saveState();
-                renderAdminUserList();
-                renderAdminP2PTransactions();
-                renderAdminInvestments();
-                renderAdminSystemPurchaseRequests();
-                renderAdminWithdrawalRequests(); // New
-                renderAdminSupportTickets();
-                renderAdminOverviewStats();
-                displayNotification(`User ${userName} and all associated data permanently deleted.`, 'success');
-            }
-        }, "Confirm User Deletion", "DELETE USER (IRREVERSIBLE)", "danger"
+            saveState();
+            renderAdminDashboard(); // Full refresh
+            displayNotification(`User ${userToDelete.name} and all associated data permanently deleted.`, 'success');
+        }, "Confirm User Deletion", "DELETE USER", "danger"
     );
 }
 function renderAdminP2PTransactions() {
@@ -2498,69 +2727,58 @@ function renderAdminP2PTransactions() {
     const tbody = table.querySelector('tbody');
 
     filteredTransactions.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).forEach(tx => {
-        const buyerUser = users.find(u => u.id === tx.buyerId);
-        const sellerUser = users.find(u => u.id === tx.sellerId);
         const displayFiatPrice = formatCurrency(tx.totalPrice, tx.currency);
 
         let proofDisplay = 'N/A';
-        if (tx.paymentProofFilename) {
+        if (tx.paymentProofDataUrl && tx.paymentProofDataUrl.startsWith('data:image')) {
+            proofDisplay = `<button class="secondary small" onclick="openProofViewerModal('${tx.paymentProofDataUrl}', 'Proof for P2P Tx: ${tx.id.substring(0,8)}')">View Proof</button>`;
+        } else if (tx.paymentProofDataUrl) {
+            proofDisplay = `<a href="${tx.paymentProofDataUrl}" target="_blank">${tx.paymentProofFilename || 'View File'}</a>`;
+        } else if (tx.paymentProofFilename) {
             proofDisplay = tx.paymentProofFilename;
-            if (tx.paymentProofDataUrl && tx.paymentProofDataUrl.startsWith('data:image')) {
-                proofDisplay = `<a href="${tx.paymentProofDataUrl}" target="_blank" title="View Proof Image">${tx.paymentProofFilename || 'View Image'} <img src="${tx.paymentProofDataUrl}" alt="Proof" style="max-height:30px; vertical-align:middle;"></a>`;
-            } else if (tx.paymentProofDataUrl && tx.paymentProofDataUrl.startsWith('data:application/pdf')) {
-                 proofDisplay = `<a href="${tx.paymentProofDataUrl}" target="_blank" title="View Proof PDF">${tx.paymentProofFilename || 'View PDF'}</a>`;
-            } else if (tx.paymentProofDataUrl) {
-                 proofDisplay = `<a href="#" onclick="alert('Proof data available but not a direct image/PDF preview. Filename: ${tx.paymentProofFilename}'); return false;" title="Proof Data available">${tx.paymentProofFilename}</a>`;
-            }
         }
 
         let actionButtons = '-';
         if (tx.status === 'disputed') {
-            actionButtons = `<button onclick="adminResolveP2PDispute('${tx.id}')" class="accent small">Resolve Dispute</button>`;
+            actionButtons = `<button onclick="adminResolveP2PDispute('${tx.id}')" class="accent small">Resolve</button>`;
         } else if (tx.status === 'payment_proof_submitted' || tx.status === 'awaiting_payment') {
-            actionButtons = `<button onclick="adminForceCancelP2P('${tx.id}')" class="danger small" title="Force cancel and refund seller's coins (if applicable)">Force Cancel</button>`;
+            actionButtons = `<button onclick="adminForceCancelP2P('${tx.id}')" class="danger small">Force Cancel</button>`;
         }
-
 
         const tr = tbody.insertRow();
         tr.innerHTML = `
             <td>${tx.id.substring(0,8)}</td>
-            <td>${buyerUser ? buyerUser.name : (tx.buyerName || 'User Deleted')} <small>(${tx.buyerId.substring(0,4)})</small></td>
-            <td>${sellerUser ? sellerUser.name : (tx.sellerName || 'User Deleted')} <small>(${tx.sellerId.substring(0,4)})</small></td>
-            <td>${tx.amount} COIN</td>
+            <td>${tx.buyerName}</td>
+            <td>${tx.sellerName}</td>
+            <td>${tx.amount.toFixed(2)} COIN</td>
             <td>${displayFiatPrice}</td>
             <td style="text-transform: capitalize; ${tx.status === 'disputed' ? 'color:var(--danger-color); font-weight:bold;' : ''}">${tx.status.replace(/_/g, ' ')}</td>
             <td>${new Date(tx.createdAt).toLocaleDateString()}</td>
             <td>${proofDisplay}</td>
             <td>${actionButtons}</td>`;
     });
-    if (filteredTransactions.length === 0) { p2pArea.innerHTML = `<p>No P2P transactions match the filter: '${filterStatus}'.</p>`; } else { p2pArea.appendChild(table); }
+        if (filteredTransactions.length === 0) {
+        p2pArea.innerHTML = `<p>No P2P transactions match the filter: '${filterStatus}'.</p>`;
+    } else {
+        p2pArea.appendChild(table);
+    }
 }
 
 function adminResolveP2PDispute(transactionId) {
     const tx = transactions.find(t => t.id === transactionId && t.status === 'disputed');
-    if (!tx) {
-        displayNotification('Disputed transaction not found or already resolved.', 'error');
-        return;
-    }
-    const buyer = users.find(u => u.id === tx.buyerId);
-    const seller = users.find(u => u.id === tx.sellerId);
-
-    if (!buyer || !seller) {
-        displayNotification('Buyer or Seller not found for this transaction. Cannot resolve.', 'error');
-        return;
-    }
-
-    showCustomPrompt("Enter resolution notes (e.g., 'Buyer paid, coins awarded', 'Seller keeps coins, no payment received'). Then manually adjust balances if needed.",
+    if (!tx) { displayNotification('Disputed transaction not found.', 'error'); return; }
+    
+    showCustomPrompt(
+        "Enter resolution notes (e.g., 'Buyer paid, coins awarded to buyer'). You MUST manually adjust balances if required, this only updates the status.",
         "", (notes) => {
             if (notes !== null) {
                 tx.status = 'resolved_by_admin';
                 tx.adminNotes = notes;
                 saveState();
                 renderAdminP2PTransactions();
-                displayNotification(`Dispute for Tx ${tx.id.substring(0,8)} marked as resolved. Notes: ${notes}. Please adjust balances manually if required.`, 'info');
-                addGlobalNotification(buyer.id, "P2P Dispute Resolved", `Admin has reviewed and resolved the dispute for Tx ${tx.id.substring(0,8)}. Check your P2P history.`, 'ud-p2p-history', 'info');
-                addGlobalNotification(seller.id, "P2P Dispute Resolved", `Admin has reviewed and resolved the dispute for Tx ${tx.id.substring(0,8)}. Check your P2P history.`, 'ud-p2p-history', 'info');
+                displayNotification(`Dispute for Tx ${tx.id.substring(0,8)} marked as resolved.`, 'info');
+                addGlobalNotification(tx.buyerId, "P2P Dispute Resolved", `Admin resolved the dispute for Tx ${tx.id.substring(0,8)}.`, 'ud-p2p-history', 'info');
+                addGlobalNotification(tx.sellerId, "P2P Dispute Resolved", `Admin resolved the dispute for Tx ${tx.id.substring(0,8)}.`, 'ud-p2p-history', 'info');
             }
         }, "Resolve P2P Dispute Manually"
     );
@@ -2568,59 +2786,44 @@ function adminResolveP2PDispute(transactionId) {
 
 function adminForceCancelP2P(transactionId) {
     const tx = transactions.find(t => t.id === transactionId);
-    if (!tx) {
-        displayNotification('Transaction not found.', 'error');
-        return;
-    }
-    if (tx.status === 'completed' || tx.status === 'cancelled' || tx.status === 'resolved_by_admin' || tx.status === 'cancelled_by_admin') {
-        displayNotification('This transaction is already finalized or cancelled.', 'warning');
-        return;
-    }
-    const seller = users.find(u => u.id === tx.sellerId);
+    if (!tx || tx.status === 'completed' || tx.status === 'cancelled_by_admin') { displayNotification('Tx not found or already finalized.', 'error'); return; }
 
     showCustomConfirm(
-        `Force cancel P2P Tx ID ${tx.id.substring(0,8)}? Seller: ${seller ? seller.name : 'N/A'}. Buyer: ${tx.buyerName}. If coins were reserved from seller's offer, they will be returned.`,
+        `Force cancel P2P Tx ID ${tx.id.substring(0,8)}? The P2P offer will be made active again.`,
         () => {
             tx.status = 'cancelled_by_admin';
             const originalOffer = sellOffers.find(o => o.id === tx.offerId);
             if (originalOffer && originalOffer.status === 'pending_sale') {
                 originalOffer.status = 'active';
-            } else if (seller && originalOffer && originalOffer.status !== 'active') {
-                 console.warn(`Force cancelling Tx ${tx.id}. Offer ${originalOffer.id} status was ${originalOffer.status}. Check seller balance.`);
             }
-
             saveState();
             renderAdminP2PTransactions();
-            displayNotification(`P2P Transaction ${tx.id.substring(0,8)} has been forcibly cancelled by admin.`, 'success');
-            addGlobalNotification(tx.buyerId, "P2P Transaction Cancelled", `P2P Transaction ${tx.id.substring(0,8)} was cancelled by an administrator.`, 'ud-p2p-history', 'warning');
-            if (seller) {
-                addGlobalNotification(tx.sellerId, "P2P Transaction Cancelled", `P2P Transaction ${tx.id.substring(0,8)} (your sale) was cancelled by an administrator. Your offer may be relisted.`, 'ud-p2p-history', 'warning');
-            }
+            displayNotification(`P2P Transaction ${tx.id.substring(0,8)} has been forcibly cancelled.`, 'success');
+            addGlobalNotification(tx.buyerId, "P2P Tx Cancelled", `Tx ${tx.id.substring(0,8)} was cancelled by an admin.`, 'ud-p2p-history', 'warning');
+            addGlobalNotification(tx.sellerId, "P2P Tx Cancelled", `Tx ${tx.id.substring(0,8)} was cancelled by an admin.`, 'ud-p2p-history', 'warning');
         }, "Force Cancel P2P Transaction", "Yes, Force Cancel", "danger"
     );
 }
 
-
-function renderAdminInvestments() {
-    const invArea = document.getElementById('admin-investments-area');
-    if(!invArea) return;
-    invArea.innerHTML = '';
+function renderAdminUserAssets() {
+    const assetsArea = document.getElementById('admin-user-assets-area');
+    if(!assetsArea) return;
+    assetsArea.innerHTML = '';
     const table = document.createElement('table'); table.className = 'data-table';
-    table.innerHTML = `<thead><tr><th>ID</th><th>User</th><th>Invested</th><th>Return</th><th>Start Date</th><th>Maturity Date</th><th>Status</th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th>User</th><th>Program Name</th><th>Base Coins</th><th>Total Return</th><th>Maturity Date</th><th>Status</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector('tbody');
-    [...investments].sort((a,b) => new Date(b.startDate) - new Date(a.startDate)).forEach(inv => {
-        const userInv = users.find(u=>u.id === inv.userId);
+    [...userAssets].sort((a,b) => new Date(b.purchaseDate) - new Date(a.purchaseDate)).forEach(asset => {
         const tr = tbody.insertRow();
+        const baseCoinsDisplay = (asset.origin && asset.origin.type === 'p2p_repackaged') ? asset.baseCoins.toFixed(2) + ' (Profit Only)' : asset.baseCoins.toFixed(2);
         tr.innerHTML = `
-            <td>${inv.id.substring(0,8)}</td>
-            <td>${userInv ? userInv.name : (inv.userName || 'User Deleted')} <small>(${inv.userId.substring(0,4)})</small></td>
-            <td>${inv.amountInvested} COIN</td>
-            <td>${inv.expectedReturn} COIN</td>
-            <td>${new Date(inv.startDate).toLocaleDateString()}</td>
-            <td>${new Date(inv.maturityDate).toLocaleDateString()}</td>
-            <td style="text-transform: capitalize;">${inv.status.replace(/_/g, ' ')}</td>`;
+            <td>${asset.userName} <small>(${asset.userId.substring(0,4)})</small></td>
+            <td>${asset.planName}</td>
+            <td>${baseCoinsDisplay}</td>
+            <td>${asset.totalReturnCoins.toFixed(2)} COIN</td>
+            <td>${new Date(asset.maturityDate).toLocaleDateString()}</td>
+            <td style="text-transform: capitalize;">${asset.status.replace(/_/g, ' ')}</td>`;
     });
-    if (investments.length === 0) { invArea.innerHTML = '<p>No investments recorded in the system.</p>'; } else { invArea.appendChild(table); }
+    if (userAssets.length === 0) { assetsArea.innerHTML = '<p>No user assets recorded in the system.</p>'; } else { assetsArea.appendChild(table); }
 }
 
 function renderAdminKycRequests() {
@@ -2630,37 +2833,30 @@ function renderAdminKycRequests() {
     const pendingKycUsers = users.filter(u => u.kycStatus === 'pending').sort((a,b) => new Date(a.kycData?.submittedAt || 0) - new Date(b.kycData?.submittedAt || 0));
 
     if (pendingKycUsers.length === 0) {
-        kycListDiv.innerHTML = '<p>No KYC requests currently pending approval. You can manage all users\' KYC via the User Management list.</p>';
+        kycListDiv.innerHTML = '<p>No KYC requests currently pending approval.</p>';
         return;
     }
 
     const table = document.createElement('table');
     table.className = 'data-table';
-    table.innerHTML = `<thead><tr><th>User Name</th><th>Email</th><th>Bank</th><th>USDT Wallet</th><th>Tel.</th><th>Country</th><th>Document</th><th>Actions</th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th>User</th><th>Email</th><th>Document</th><th>Actions</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector('tbody');
 
     pendingKycUsers.forEach(user => {
         const kyc = user.kycData || {};
         let docDisplay = 'No Document';
-        if (kyc.documentFilename) {
-            docDisplay = kyc.documentFilename;
-            if (kyc.documentUrl && (kyc.documentUrl.startsWith('data:image') || kyc.documentUrl.startsWith('data:application/pdf'))) {
-                docDisplay = `<a href="${kyc.documentUrl}" target="_blank" title="View KYC Document">${kyc.documentFilename}</a>`;
-            }
+        if (kyc.documentUrl) {
+            docDisplay = `<a href="${kyc.documentUrl}" target="_blank">${kyc.documentFilename || 'View Document'}</a>`;
         }
         const tr = tbody.insertRow();
         tr.innerHTML = `
             <td>${user.name}</td>
             <td>${user.email}</td>
-            <td>${kyc.bankName || 'N/A'} (${kyc.bankAccount || 'N/A'})</td>
-            <td>${kyc.usdtWallet || 'N/A'}</td>
-            <td>${kyc.telephone || 'N/A'}</td>
-            <td>${kyc.country || 'N/A'}</td>
             <td>${docDisplay}</td>
             <td>
                 <button onclick="approveKyc('${user.id}')" class="accent small">Approve</button>
                 <button onclick="rejectKyc('${user.id}')" class="danger small">Reject</button>
-                 <button onclick="openAdminEditKycModal('${user.id}')" class="secondary small" title="View/Edit Full Details">More/Edit</button>
+                 <button onclick="openAdminEditKycModal('${user.id}')" class="secondary small">More/Edit</button>
             </td>
         `;
     });
@@ -2671,7 +2867,7 @@ function approveKyc(userId) {
     const user = users.find(u => u.id === userId);
     if (user && (user.kycStatus === 'pending' || user.kycStatus === 'rejected')) {
         showCustomConfirm(
-            `Are you sure you want to approve KYC for ${user.name}?`,
+            `Approve KYC for ${user.name}?`,
             () => {
                 user.kycStatus = 'approved';
                 if(user.kycData) user.kycData.rejectionReason = null;
@@ -2679,15 +2875,10 @@ function approveKyc(userId) {
                 renderAdminKycRequests();
                 renderAdminUserList();
                 renderAdminOverviewStats();
-                if (currentUser && !currentUser.isAdmin && currentUser.id === userId) renderKycForm();
                 displayNotification(`KYC for ${user.name} has been approved.`, 'success');
-                addGlobalNotification(userId, "KYC Approved", "Congratulations! Your KYC verification has been approved by the administrator.", 'ud-kyc', 'success');
+                addGlobalNotification(userId, "KYC Approved", "Your KYC has been approved.", 'ud-kyc', 'success');
             }, "Approve KYC", "Yes, Approve", "accent"
         );
-    } else if (user && user.kycStatus === 'approved') {
-        displayNotification(`${user.name}'s KYC is already approved.`, 'info');
-    } else {
-        displayNotification("User not found or KYC not in a state to be approved.", "error");
     }
 }
 
@@ -2695,8 +2886,7 @@ function rejectKyc(userId) {
     const user = users.find(u => u.id === userId);
     if (user && (user.kycStatus === 'pending' || user.kycStatus === 'approved')) {
         showCustomPrompt(
-            `Provide a clear reason for rejecting KYC for ${user.name} (${user.email}):`,
-            user.kycData?.rejectionReason || "Document unclear or information mismatch.",
+            `Provide a reason for rejecting KYC for ${user.name}:`, "",
             (reason) => {
                 if (reason !== null && reason.trim() !== "") {
                     user.kycStatus = 'rejected';
@@ -2705,143 +2895,75 @@ function rejectKyc(userId) {
                     saveState();
                     renderAdminKycRequests();
                     renderAdminUserList();
-                    renderAdminOverviewStats();
-                    if (currentUser && !currentUser.isAdmin && currentUser.id === userId) renderKycForm();
-                    displayNotification(`KYC for ${user.name} rejected. Reason: ${reason}`, 'info');
-                    addGlobalNotification(userId, "KYC Rejected", `Your KYC verification was rejected. Reason: ${reason}. Please review and resubmit if necessary.`, 'ud-kyc', 'error');
-                } else if (reason !== null && reason.trim() === "") {
-                    displayNotification("Rejection reason cannot be empty. Please provide a clear explanation.", "warning");
+                    addGlobalNotification(userId, "KYC Rejected", `Your KYC was rejected. Reason: ${reason}.`, 'ud-kyc', 'error');
                 }
             }, "KYC Rejection Reason"
         );
-    } else if (user && user.kycStatus === 'rejected') {
-        displayNotification(`${user.name}'s KYC is already rejected. You can edit details via User Management.`, 'info');
-    } else {
-         displayNotification("User not found or KYC not in a state to be rejected.", "error");
     }
 }
 
 function openAdminEditKycModal(userId) {
     const user = users.find(u => u.id === userId);
-    if (!user) {
-        displayNotification("User not found for KYC edit.", "error");
-        return;
-    }
-
+    if (!user) { displayNotification("User not found.", "error"); return; }
     document.getElementById('admin-edit-kyc-userId').value = userId;
-    document.getElementById('admin-edit-kyc-modal-title').textContent = `Edit KYC: ${user.name} (${user.email})`;
-
-    const kyc = user.kycData || { bankName: '', bankAccount: '', usdtWallet: '', telephone: '', country: '', documentUrl: null, documentFilename: null, rejectionReason: null };
-
+    document.getElementById('admin-edit-kyc-modal-title').textContent = `Edit KYC: ${user.name}`;
+    const kyc = user.kycData || {};
     document.getElementById('admin-kyc-bank-name').value = kyc.bankName || '';
     document.getElementById('admin-kyc-bank-account').value = kyc.bankAccount || '';
     document.getElementById('admin-kyc-usdt-wallet').value = kyc.usdtWallet || '';
     document.getElementById('admin-kyc-telephone').value = kyc.telephone || '';
-
     populateCountryDropdown('admin-kyc-country', kyc.country);
     document.getElementById('admin-kyc-status').value = user.kycStatus || 'none';
 
+    // P2P Bypass checkbox
+    document.getElementById('admin-kyc-p2p-bypass').checked = !user.p2pMarketRequiresInitialPurchase;
+
     const rejectionGroup = document.getElementById('admin-kyc-rejection-reason-group');
     const rejectionTextarea = document.getElementById('admin-kyc-rejection-reason');
-    if (document.getElementById('admin-kyc-status').value === 'rejected') {
-        rejectionTextarea.value = kyc.rejectionReason || '';
-        rejectionGroup.classList.remove('hidden');
-    } else {
-        rejectionTextarea.value = '';
-        rejectionGroup.classList.add('hidden');
-    }
-
-    let docDisplay = 'No Document Provided';
-    if (kyc.documentFilename) {
-        docDisplay = `Current: ${kyc.documentFilename}`;
-        if (kyc.documentUrl && (kyc.documentUrl.startsWith('data:image') || kyc.documentUrl.startsWith('data:application/pdf'))) {
-            docDisplay += ` <a href="${kyc.documentUrl}" target="_blank" title="View Current Document">(View)</a>`;
-        }
-    }
-    document.getElementById('admin-kyc-doc-display').innerHTML = docDisplay;
+    rejectionGroup.classList.toggle('hidden', document.getElementById('admin-kyc-status').value !== 'rejected');
+    rejectionTextarea.value = kyc.rejectionReason || '';
+    document.getElementById('admin-kyc-doc-display').innerHTML = kyc.documentUrl ? `<a href="${kyc.documentUrl}" target="_blank">View Current Document</a>` : 'No Document Provided';
     document.getElementById('admin-kyc-new-document').value = '';
-
     document.getElementById('admin-edit-kyc-modal').style.display = 'block';
 }
 
 function closeAdminEditKycModal() {
     document.getElementById('admin-edit-kyc-modal').style.display = 'none';
-    document.getElementById('admin-kyc-new-document').value = '';
 }
 
 function saveAdminKycChanges() {
     const userId = document.getElementById('admin-edit-kyc-userId').value;
     const user = users.find(u => u.id === userId);
-    if (!user) {
-        displayNotification('User not found for KYC update.', 'error');
-        closeAdminEditKycModal();
-        return;
-    }
-    const oldKycStatus = user.kycStatus;
-    const newKycStatus = document.getElementById('admin-kyc-status').value;
+    if (!user) { displayNotification('User not found.', 'error'); return; }
 
     if (!user.kycData) user.kycData = {};
-
+    const oldKycStatus = user.kycStatus;
     user.kycData.bankName = document.getElementById('admin-kyc-bank-name').value.trim();
     user.kycData.bankAccount = document.getElementById('admin-kyc-bank-account').value.trim();
     user.kycData.usdtWallet = document.getElementById('admin-kyc-usdt-wallet').value.trim();
     user.kycData.telephone = document.getElementById('admin-kyc-telephone').value.trim();
     user.kycData.country = document.getElementById('admin-kyc-country').value;
-    user.kycStatus = newKycStatus;
-
-    let kycStatusChanged = oldKycStatus !== user.kycStatus;
-
-    if (user.kycStatus === 'rejected') {
-        user.kycData.rejectionReason = document.getElementById('admin-kyc-rejection-reason').value.trim();
-        if (!user.kycData.rejectionReason) {
-            displayNotification('Rejection reason is required if KYC status is set to "rejected". Changes not saved for reason.', 'error');
-            user.kycStatus = oldKycStatus;
-            document.getElementById('admin-kyc-status').value = oldKycStatus;
-            return;
-        }
-    } else {
-        user.kycData.rejectionReason = null;
-    }
+    user.kycStatus = document.getElementById('admin-kyc-status').value;
+    user.p2pMarketRequiresInitialPurchase = !document.getElementById('admin-kyc-p2p-bypass').checked;
+    user.kycData.rejectionReason = user.kycStatus === 'rejected' ? document.getElementById('admin-kyc-rejection-reason').value.trim() : null;
 
     const newDocumentFile = document.getElementById('admin-kyc-new-document').files[0];
-
     const processSave = () => {
         saveState();
         renderAdminUserList();
         renderAdminKycRequests();
-        renderAdminOverviewStats();
         closeAdminEditKycModal();
-        displayNotification(`KYC details for ${user.name} updated successfully.`, 'success');
-
-        if(kycStatusChanged){
-             if(user.kycStatus === 'approved' && oldKycStatus !== 'approved'){
-                 addGlobalNotification(userId, "KYC Approved", "Your KYC has been approved by the administrator.", 'ud-kyc', 'success');
-             } else if (user.kycStatus === 'rejected' && oldKycStatus !== 'rejected'){
-                 addGlobalNotification(userId, "KYC Rejected", `Your KYC status was changed to rejected. Reason: ${user.kycData.rejectionReason}`, 'ud-kyc', 'error');
-             } else if (user.kycStatus === 'pending' && oldKycStatus === 'approved') {
-                 addGlobalNotification(userId, "KYC Re-evaluation Pending", `Your KYC status was changed to pending re-evaluation by an admin.`, 'ud-kyc', 'warning');
-             }
-             if (currentUser && !currentUser.isAdmin && currentUser.id === userId) {
-                 renderKycForm();
-             }
+        displayNotification(`KYC details for ${user.name} updated.`, 'success');
+        if (oldKycStatus !== user.kycStatus) {
+            addGlobalNotification(userId, "KYC Status Updated", `Admin updated your KYC status to: ${user.kycStatus}.`, 'ud-kyc', 'info');
         }
     };
 
     if (newDocumentFile) {
-        if (newDocumentFile.size > 2 * 1024 * 1024) {
-            displayNotification("New document file too large (max 2MB). Document not updated.", "error");
-            processSave();
-            return;
-        }
-        user.kycData.documentFilename = newDocumentFile.name;
         const reader = new FileReader();
-        reader.onload = function(e) {
+        reader.onload = (e) => {
             user.kycData.documentUrl = e.target.result;
-            processSave();
-        };
-        reader.onerror = function(e) {
-            console.error("File reading error for admin KYC update:", e);
-            displayNotification('Error reading new document file. Document not updated.', 'error');
+            user.kycData.documentFilename = newDocumentFile.name;
             processSave();
         };
         reader.readAsDataURL(newDocumentFile);
@@ -2850,125 +2972,209 @@ function saveAdminKycChanges() {
     }
 }
 
+// --- P2P Offer Management (Admin) ---
+function renderAdminP2POffers() {
+    const listDiv = document.getElementById('admin-p2p-offers-list');
+    if (!listDiv) return;
+
+    const activeOffers = sellOffers.filter(a => a.status === 'active')
+        .sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+    
+    listDiv.innerHTML = '';
+    if (activeOffers.length === 0) {
+        listDiv.innerHTML = '<p>No active P2P sell offers from users at the moment.</p>';
+        return;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    table.innerHTML = `<thead><tr><th>User</th><th>Amount (COIN)</th><th>Price</th><th>Total Value</th><th>Status</th><th>Actions</th></tr></thead><tbody></tbody>`;
+    const tbody = table.querySelector('tbody');
+
+    activeOffers.forEach(offer => {
+        const tr = tbody.insertRow();
+        const price = offer.adminPrice;
+        const currency = offer.adminCurrency;
+        const statusText = "Repackaged";
+
+        tr.innerHTML = `
+            <td>${offer.sellerName}</td>
+            <td>${offer.amount.toFixed(2)}</td>
+            <td>${formatCurrency(price, currency)}</td>
+            <td>${formatCurrency(offer.amount * price, currency)}</td>
+            <td><span class="status-repackaged">${statusText}</span></td>
+            <td>
+                <button class="secondary small" onclick="openAdminRepackageP2POfferModal('${offer.id}')">Edit Name</button>
+                <button class="danger small" onclick="handleAdminDeleteP2POffer('${offer.id}')">Delete</button>
+            </td>
+        `;
+    });
+    listDiv.appendChild(table);
+}
+
+function handleAdminDeleteP2POffer(offerId) {
+    const offerIndex = sellOffers.findIndex(o => o.id === offerId);
+    if (offerIndex === -1) {
+        displayNotification("Offer not found.", "error");
+        return;
+    }
+    const offer = sellOffers[offerIndex];
+    const seller = users.find(u => u.id === offer.sellerId);
+
+    showCustomConfirm(
+        `Are you sure you want to delete this offer from ${offer.sellerName}? The coins will be returned to the user's liquid balance.`,
+        () => {
+            if (seller) {
+                seller.coinBalance += offer.amount; // Return coins to liquid balance
+            }
+
+            const asset = userAssets.find(a => a.id === offer.assetId);
+            if (asset) {
+                asset.status = 'credited'; // Revert asset status
+            }
+            
+            sellOffers.splice(offerIndex, 1);
+            saveState();
+            renderAdminP2POffers();
+            renderAdminOverviewStats();
+            displayNotification(`Offer from ${offer.sellerName} has been deleted and coins returned to user.`, "success");
+            if (seller) {
+                addGlobalNotification(seller.id, 'P2P Offer Cancelled by Admin', `Your P2P offer was cancelled by an administrator. The coins have been returned to your liquid balance.`, 'ud-p2p-market', 'warning');
+            }
+        }, "Confirm Offer Deletion", "Delete Offer", "danger"
+    );
+}
+
+function openAdminRepackageP2POfferModal(offerId) {
+    const offer = sellOffers.find(o => o.id === offerId);
+    if (!offer) { displayNotification("Offer not found.", "error"); return; }
+    
+    document.getElementById('admin-repackage-p2p-offer-id').value = offerId;
+    const modal = document.getElementById('admin-repackage-p2p-offer-modal');
+    modal.querySelector('h3').textContent = 'Edit P2P Offer Name';
+    modal.querySelector('p').textContent = 'All financial terms are set automatically. You can only edit the display name for this P2P offer.';
+
+    const originalDetailsDiv = document.getElementById('admin-repackage-p2p-original-details');
+    originalDetailsDiv.innerHTML = `
+        <p><strong>Seller:</strong> ${offer.sellerName}</p>
+        <p><strong>Coins for Sale:</strong> ${offer.amount.toFixed(2)}</p>
+        <p><strong>Automated Price:</strong> ${formatCurrency(offer.adminPrice, offer.adminCurrency)}</p>
+        <p><strong>Automated Return:</strong> ${offer.adminReturnPercentage}%</p>
+        <p><strong>Automated Maturity:</strong> ${formatDuration(offer.adminMaturityDurationSeconds)}</p>
+    `;
+    
+    document.getElementById('admin-repackage-plan-name').value = offer.adminPlanName || `P2P Program from ${offer.sellerName}`;
+
+    // [FIXED] More robustly hide the non-functional fields
+    document.getElementById('admin-repackage-price').parentElement.parentElement.style.display = 'none';
+    document.getElementById('admin-repackage-return').parentElement.parentElement.style.display = 'none';
+    
+    modal.style.display = 'block';
+}
+
+function closeAdminRepackageP2POfferModal() {
+    const modal = document.getElementById('admin-repackage-p2p-offer-modal');
+    modal.style.display = 'none';
+    
+    // [FIXED] Restore visibility for next time
+    modal.querySelector('#admin-repackage-price').parentElement.parentElement.style.display = 'flex';
+    modal.querySelector('#admin-repackage-return').parentElement.parentElement.style.display = 'flex';
+}
+
+function saveAdminRepackageP2POffer() {
+    const offerId = document.getElementById('admin-repackage-p2p-offer-id').value;
+    const offer = sellOffers.find(o => o.id === offerId);
+    if (!offer) { displayNotification("Offer not found.", "error"); return; }
+
+    const newPlanName = document.getElementById('admin-repackage-plan-name').value.trim();
+
+    if (!newPlanName) {
+        displayNotification("Please enter a valid plan name.", "error");
+        return;
+    }
+    
+    offer.adminPlanName = newPlanName;
+
+    saveState();
+    closeAdminRepackageP2POfferModal();
+    renderAdminP2POffers();
+    displayNotification("P2P offer name has been successfully updated.", "success");
+    addGlobalNotification(offer.sellerId, 'P2P Offer Name Updated', `An admin has updated the name of your P2P offer.`, 'ud-p2p-market', 'info');
+}
+
+
 // --- Withdrawal Management (Admin) ---
 function renderAdminWithdrawalRequests() {
     const listDiv = document.getElementById('admin-withdrawal-requests-list');
     if (!listDiv) return;
     listDiv.innerHTML = '';
 
-    const pendingRequests = withdrawalRequests.filter(req => req.status === 'pending_admin_approval')
-        .sort((a, b) => new Date(a.requestedAt) - new Date(b.requestedAt));
-    const processedRequests = withdrawalRequests.filter(req => req.status !== 'pending_admin_approval')
-        .sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt)); // Show newest processed first
+    const pendingRequests = withdrawalRequests.filter(req => req.status === 'pending_admin_approval');
+    const processedRequests = withdrawalRequests.filter(req => req.status !== 'pending_admin_approval').sort((a,b) => new Date(b.requestedAt) - new Date(a.requestedAt));
 
-    if (withdrawalRequests.length === 0) {
-        listDiv.innerHTML = '<p>No withdrawal requests found.</p>';
-        return;
-    }
+    if (withdrawalRequests.length === 0) { listDiv.innerHTML = '<p>No withdrawal requests found.</p>'; return; }
 
     const table = document.createElement('table');
     table.className = 'data-table';
-    table.innerHTML = `<thead><tr><th>Date</th><th>User</th><th>Amount</th><th>Currency</th><th>Destination</th><th>Status</th><th>Action/Notes</th></tr></thead><tbody></tbody>`;
+    table.innerHTML = `<thead><tr><th>Date</th><th>User</th><th>Amount</th><th>Destination</th><th>Status</th><th>Action/Notes</th></tr></thead><tbody></tbody>`;
     const tbody = table.querySelector('tbody');
 
     const renderRow = (req) => {
         const tr = tbody.insertRow();
-        let actions = '';
+        let actions = req.adminNotes || 'N/A';
         if (req.status === 'pending_admin_approval') {
-            actions = `
-                <button onclick="approveWithdrawalRequest('${req.id}')" class="accent small">Approve</button>
-                <button onclick="rejectWithdrawalRequest('${req.id}')" class="danger small">Reject</button>
-            `;
-        } else {
-            actions = req.adminNotes || (req.status === 'approved' ? 'Awaiting Offline Payment' : 'N/A');
+            actions = `<button onclick="approveWithdrawalRequest('${req.id}')" class="accent small">Approve</button> <button onclick="rejectWithdrawalRequest('${req.id}')" class="danger small">Reject</button>`;
         }
         tr.innerHTML = `
             <td>${new Date(req.requestedAt).toLocaleDateString()}</td>
-            <td>${req.userName} <small>(${req.userId.substring(0,4)})</small></td>
+            <td>${req.userName}</td>
             <td>${formatCurrency(req.amount, req.currency)}</td>
-            <td>${req.currency}</td>
             <td>${req.destination}</td>
             <td style="text-transform: capitalize;">${req.status.replace(/_/g, ' ')}</td>
             <td>${actions}</td>
         `;
     };
-
     pendingRequests.forEach(renderRow);
-    if (pendingRequests.length > 0 && processedRequests.length > 0) {
-        const separatorRow = tbody.insertRow();
-        separatorRow.innerHTML = `<td colspan="7" style="background-color: #f0f0f0; text-align:center; font-weight:bold;">Processed Requests</td>`;
+    if(pendingRequests.length > 0 && processedRequests.length > 0) {
+        tbody.insertRow().innerHTML = `<td colspan="6" style="background-color: #f0f0f0; text-align:center; font-weight:bold;">Processed Requests</td>`;
     }
     processedRequests.forEach(renderRow);
-
     listDiv.appendChild(table);
 }
 
 function approveWithdrawalRequest(requestId) {
     const request = withdrawalRequests.find(req => req.id === requestId);
-    if (!request || request.status !== 'pending_admin_approval') {
-        displayNotification('Request not found or not pending approval.', 'error');
-        return;
-    }
-
-    showCustomConfirm(
-        `Approve withdrawal of ${formatCurrency(request.amount, request.currency)} for ${request.userName}? This signifies you will process the payment offline.`,
-        () => {
-            request.status = 'approved'; // Admin has approved, payment is now due offline
-            request.processedAt = new Date().toISOString();
-            request.adminNotes = "Approved by admin. Payment pending.";
-            saveState();
-            renderAdminWithdrawalRequests();
-            renderAdminOverviewStats();
-            renderWalletBalances(); // To update potential green highlight for user
-            displayNotification(`Withdrawal for ${request.userName} approved. Remember to process the payment.`, 'success');
-            addGlobalNotification(request.userId, "Withdrawal Approved", `Your withdrawal request for ${formatCurrency(request.amount, request.currency)} has been approved by admin. Payment will be processed to your registered account.`, 'ud-withdraw-funds', 'success');
-        }, "Approve Withdrawal", "Approve", "accent"
-    );
+    if (!request || request.status !== 'pending_admin_approval') return;
+    showCustomConfirm(`Approve withdrawal of ${formatCurrency(request.amount, request.currency)} for ${request.userName}?`, () => {
+        request.status = 'approved';
+        request.adminNotes = "Approved by admin. Payment pending.";
+        saveState();
+        renderAdminWithdrawalRequests();
+        addGlobalNotification(request.userId, "Withdrawal Approved", `Your withdrawal for ${formatCurrency(request.amount, request.currency)} was approved.`, 'ud-withdraw-funds', 'success');
+    }, "Approve Withdrawal", "Approve", "accent");
 }
 
 function rejectWithdrawalRequest(requestId) {
     const request = withdrawalRequests.find(req => req.id === requestId);
-    if (!request || request.status !== 'pending_admin_approval') {
-        displayNotification('Request not found or not pending approval.', 'error');
-        return;
-    }
-
-    showCustomPrompt(
-        `Enter reason for rejecting withdrawal of ${formatCurrency(request.amount, request.currency)} for ${request.userName}:`,
-        "",
-        (reason) => {
-            if (reason === null) return; // User cancelled prompt
-
-            const user = users.find(u => u.id === request.userId);
-            if (user) {
-                // Return funds to user's walletBalance
-                if (!user.walletBalance) user.walletBalance = { USD: 0, ZAR: 0, BTC: 0 };
-                user.walletBalance[request.currency] = (user.walletBalance[request.currency] || 0) + request.amount;
-            } else {
-                console.error(`User ${request.userId} not found for withdrawal rejection refund.`);
-                 displayNotification('User not found, cannot refund automatically. Please check manually.', 'error');
-            }
-
-            request.status = 'rejected';
-            request.processedAt = new Date().toISOString();
-            request.adminNotes = `Rejected: ${reason || 'No reason provided.'}`;
-            saveState();
-            renderAdminWithdrawalRequests();
-            renderAdminOverviewStats();
-            renderWalletBalances(); // Update user's wallet display if they are viewing
-            displayNotification(`Withdrawal for ${request.userName} rejected. Funds returned to user. Reason: ${reason}`, 'info');
-            addGlobalNotification(request.userId, "Withdrawal Rejected", `Your withdrawal request for ${formatCurrency(request.amount, request.currency)} was rejected. Reason: ${reason}. Funds have been returned to your wallet.`, 'ud-withdraw-funds', 'error');
-        },
-        "Reject Withdrawal Reason"
-    );
+    if (!request || request.status !== 'pending_admin_approval') return;
+    showCustomPrompt(`Enter reason for rejecting withdrawal:`, "", (reason) => {
+        if (reason === null) return;
+        const user = users.find(u => u.id === request.userId);
+        if (user) {
+            user.walletBalance[request.currency] = (user.walletBalance[request.currency] || 0) + request.amount;
+        }
+        request.status = 'rejected';
+        request.adminNotes = `Rejected: ${reason || 'No reason.'}`;
+        saveState();
+        renderAdminWithdrawalRequests();
+        addGlobalNotification(request.userId, "Withdrawal Rejected", `Your withdrawal for ${formatCurrency(request.amount, request.currency)} was rejected. Funds returned.`, 'ud-withdraw-funds', 'error');
+    }, "Reject Withdrawal Reason");
 }
 
 
 // --- Initial Load ---
 window.onload = () => {
-    const currentYearEl = document.getElementById('currentYear');
-    if (currentYearEl) currentYearEl.textContent = new Date().getFullYear();
-
+    document.getElementById('currentYear').textContent = new Date().getFullYear();
     populateCountryDropdown('kyc-country');
     populateCountryDropdown('admin-kyc-country');
 
@@ -2977,83 +3183,49 @@ window.onload = () => {
 
     if (persistedUserJSON) {
         const persistedUserData = JSON.parse(persistedUserJSON);
-
         if (persistedUserData.isAdmin) {
             currentUser = persistedUserData;
         } else {
             const freshUser = users.find(u => u.id === persistedUserData.id);
             if (freshUser) {
                 currentUser = freshUser;
-                currentUser.walletBalance = currentUser.walletBalance || { USD: 0, ZAR: 0, BTC: 0 };
-                currentUser.hasMadeInitialSystemPurchase = currentUser.hasMadeInitialSystemPurchase === undefined ? false : currentUser.hasMadeInitialSystemPurchase;
-                currentUser.zarProfitWallet = currentUser.zarProfitWallet === undefined ? 0 : currentUser.zarProfitWallet;
-                currentUser.usdProfitWallet = currentUser.usdProfitWallet === undefined ? 0 : currentUser.usdProfitWallet;
-                currentUser.kycStatus = currentUser.kycStatus || 'none';
-                currentUser.kycData = currentUser.kycData || { bankName: '', bankAccount: '', usdtWallet: '', telephone: '', country: '', documentUrl: null, documentFilename: null, rejectionReason: null, submittedAt: null };
-                currentUser.lastSystemPurchaseBonusPercentage = currentUser.lastSystemPurchaseBonusPercentage === undefined ? 0 : currentUser.lastSystemPurchaseBonusPercentage;
-                currentUser.lastSystemPurchaseBaseCoinPrice = currentUser.lastSystemPurchaseBaseCoinPrice === undefined ? 0 : currentUser.lastSystemPurchaseBaseCoinPrice;
             } else {
-                console.warn("Persisted user ID not found in current users list. Logging out.");
                 handleLogout();
                 return;
             }
         }
-
         if (currentUser.isAdmin) {
             switchView('admin-dashboard-view', true);
             renderAdminDashboard();
-            setActiveLink(document.getElementById('nav-dashboard'));
         } else {
             switchView('user-dashboard-view', true);
             renderUserDashboard();
-            setActiveLink(document.getElementById('nav-dashboard'));
         }
+        setActiveLink(document.getElementById('nav-dashboard'));
     } else {
         switchView(lastView, true);
-         if (lastView === 'landing-page-view') {
-            setActiveLink(document.querySelector('#nav-links li a[onclick*=\'landing-page-view\']'));
-        } else {
-            const linkForLastView = document.querySelector(`#nav-links a[onclick*="'${lastView}'"]`);
-            if(linkForLastView) setActiveLink(linkForLastView);
-        }
+        const linkForLastView = document.querySelector(`#nav-links a[onclick*="'${lastView}'"]`) || document.querySelector('#nav-links li a[onclick*=\'landing-page-view\']');
+        if(linkForLastView) setActiveLink(linkForLastView);
     }
 
-    document.addEventListener('click', function(event) {
+    document.addEventListener('click', (event) => {
         const panel = document.getElementById('notification-panel');
         const bellButton = document.getElementById('notification-bell-button');
-        if (panel && bellButton && !panel.classList.contains('hidden')) {
-            if (!panel.contains(event.target) && !bellButton.contains(event.target) && event.target !== bellButton && !bellButton.contains(event.target.parentNode)) {
-                panel.classList.add('hidden');
-            }
+        if (panel && bellButton && !panel.classList.contains('hidden') && !panel.contains(event.target) && !bellButton.contains(event.target)) {
+            panel.classList.add('hidden');
         }
     });
 
-    const adminKycStatusSelect = document.getElementById('admin-kyc-status');
-    if (adminKycStatusSelect) {
-        adminKycStatusSelect.addEventListener('change', function() {
-            const rejectionGroup = document.getElementById('admin-kyc-rejection-reason-group');
-            if (this.value === 'rejected') {
-                rejectionGroup.classList.remove('hidden');
-            } else {
-                rejectionGroup.classList.add('hidden');
-            }
-        });
-    }
-
-    // --- On-Scroll Animation Logic ---
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                entry.target.classList.add('visible');
-            }
-        });
-    }, { threshold: 0.1 });
-
-    document.querySelectorAll('.animate-on-scroll').forEach(el => {
-        observer.observe(el);
+    document.getElementById('admin-kyc-status')?.addEventListener('change', function() {
+        document.getElementById('admin-kyc-rejection-reason-group').classList.toggle('hidden', this.value !== 'rejected');
     });
 
-    if (document.getElementById('unread-notification-count')) {
-         updateNotificationBellCount();
-    }
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) entry.target.classList.add('visible');
+        });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.animate-on-scroll').forEach(el => observer.observe(el));
+
+    updateNotificationBellCount();
 };

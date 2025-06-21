@@ -97,18 +97,18 @@
             <div class="info-grid">
                 <div class="info-card animate-on-scroll fade-in-up" data-delay="2">
                     <i class="fas fa-exchange-alt"></i>
-                    <strong>Multi-Currency P2P</strong>
-                    <span>Trade COINs for USD, ZAR, or BTC directly with peers.</span>
+                    <strong>Admin-Brokered P2P</strong>
+                    <span>Sell matured assets on our secure, admin-managed P2P market.</span>
                 </div>
                 <div class="info-card animate-on-scroll fade-in-up" data-delay="3">
                     <i class="fas fa-store"></i>
-                    <strong>System Coin Sales</strong>
-                    <span>Purchase COINs directly from the Seller via special sale plans.</span>
+                    <strong>System Asset Programs</strong>
+                    <span>Purchase asset programs directly from the system with defined returns.</span>
                 </div>
                 <div class="info-card animate-on-scroll fade-in-up" data-delay="4">
                     <i class="fas fa-piggy-bank"></i>
-                    <strong>Investment Programs</strong>
-                    <span>Grow your COIN holdings with our structured investment plans.</span>
+                    <strong>Asset Growth</strong>
+                    <span>Watch your assets grow over a defined period and prepare them for market.</span>
                 </div>
                  <div class="info-card animate-on-scroll fade-in-up" data-delay="5">
                     <i class="fas fa-user-shield"></i>
@@ -136,8 +136,8 @@
                  <div class="step-arrow"><i class="fas fa-arrow-right"></i></div>
                  <div class="step-card animate-on-scroll slide-in-right" data-delay="4">
                      <div class="step-icon"><i class="fas fa-coins"></i></div>
-                     <h3>3. Fund & Invest</h3>
-                     <p>Purchase COINs, explore the P2P market, and start investing.</p>
+                     <h3>3. Fund & Grow</h3>
+                     <p>Purchase an asset program, watch it mature, and sell on the P2P market.</p>
                  </div>
              </div>
         </section>
@@ -198,12 +198,12 @@
                 <ul>
                     <li><button class="active" onclick="showUserDashboardSection('ud-overview', this)"><i class="fas fa-wallet"></i> Overview & Wallet</button></li>
                     <li><button onclick="showUserDashboardSection('ud-kyc', this)"><i class="fas fa-user-shield"></i> KYC Verification</button></li>
-                    <li><button onclick="showUserDashboardSection('ud-system-sale', this)"><i class="fas fa-store"></i> System Coin Sale</button></li>
+                    <li><button onclick="showUserDashboardSection('ud-system-sale', this)"><i class="fas fa-store"></i> Marketplace</button></li>
+                    <li><button onclick="showUserDashboardSection('ud-my-assets', this)"><i class="fas fa-piggy-bank"></i> My Assets</button></li>
                     <li><button onclick="showUserDashboardSection('ud-p2p-market', this)"><i class="fas fa-exchange-alt"></i> P2P Market</button></li>
                     <li><button onclick="showUserDashboardSection('ud-pending-transactions', this)"><i class="fas fa-hourglass-half"></i> Pending Transactions</button></li>
                     <li><button onclick="showUserDashboardSection('ud-p2p-history', this)"><i class="fas fa-history"></i> P2P History</button></li>
-                    <li><button onclick="showUserDashboardSection('ud-investments', this)"><i class="fas fa-piggy-bank"></i> Investments</button></li>
-                    <li><button onclick="showUserDashboardSection('ud-withdraw-funds', this)"><i class="fas fa-money-bill-wave"></i> Withdraw Funds</button></li>
+                    <li class="hidden"><button onclick="showUserDashboardSection('ud-withdraw-funds', this)"><i class="fas fa-money-bill-wave"></i> Withdraw Funds</button></li>
                     <li><button onclick="showUserDashboardSection('ud-support-tickets', this)"><i class="fas fa-life-ring"></i> Support Tickets</button></li>
                 </ul>
             </aside>
@@ -211,7 +211,11 @@
                 <div id="ud-overview" class="dashboard-card">
                     <h3><i class="fas fa-chart-pie"></i> Account Overview</h3>
                     <div class="info-grid" style="grid-template-columns: 1fr;">
-                        <div class="info-card" id="user-coin-balance-card"><strong><i class="fas fa-coins"></i> Coin Balance</strong><span id="coin-balance">0</span> COIN</div>
+                        <div class="info-card" id="user-coin-balance-card">
+                            <i class="fas fa-coins"></i>
+                            <strong>Liquid Coin Balance</strong>
+                            <div><span id="coin-balance">0.00</span> COIN</div>
+                        </div>
                     </div>
                      <div id="wallet-balances-grid" class="info-grid" style="margin-top: 1.5rem;">
                         <!-- Wallet balances will be populated here by JS -->
@@ -263,67 +267,46 @@
                     </div>
                 </div>
                 <div id="ud-system-sale" class="dashboard-card hidden">
-                    <h3><i class="fas fa-store"></i> System Coin Sale</h3>
-                    <p id="system-sale-initial-purchase-message" class="hidden" style="padding:1rem; background-color: #E1F5FE; border-left: 4px solid var(--accent-color); color: var(--primary-color);">
-                        Welcome! To unlock all platform features, including the P2P market, please make your first COIN purchase from one of the system plans below.
+                    <h3><i class="fas fa-store"></i> Marketplace</h3>
+                     <p id="system-sale-initial-purchase-message" class="hidden" style="padding:1rem; background-color: #E1F5FE; border-left: 4px solid var(--accent-color); color: var(--primary-color); margin-bottom: 1.5rem;">
+                        Welcome! To start growing your assets, please make your first purchase from one of the seller's programs below.
                     </p>
-                    <p id="countdown-timer-container">System Sale Status: <span id="countdown-timer" style="font-weight:bold;">Loading...</span></p>
+                    <p id="countdown-timer-container">Marketplace Status: <span id="countdown-timer" style="font-weight:bold;">Loading...</span></p>
                     <div id="system-sale-plans-area" class="hidden">
-                        <h4>Available Purchase Plans from Seller (8% COIN Bonus on all plans!)</h4>
+                        <h4>Available Asset Programs & P2P Offers</h4>
                         <div id="user-system-sale-plans-list"></div>
-                         <hr style="margin: 1.5rem 0;">
-                        <h4>Or Buy from P2P Market:</h4>
-                        <div id="system-sale-p2p-offers-list">
-                            <p class="loading-text">Loading P2P offers...</p>
-                        </div>
                     </div>
                     <div id="system-sale-user-pending-message" class="hidden"></div>
                 </div>
-                <!-- ##### MODIFIED SECTION START ##### -->
-                <div id="ud-p2p-market" class="dashboard-card hidden">
-                    <h3><i class="fas fa-exchange-alt"></i> P2P Market: Buy & Sell COINs</h3>
-                    <div id="p2p-market-disabled-message" class="hidden" style="padding:1rem; background-color: #FFF3E0; border-left: 4px solid var(--warning-color); color: var(--text-dark); margin-bottom: 1rem;">
-                        <i class="fas fa-lock"></i> P2P market features are enabled after your first COIN purchase from a System Sale Plan.
-                    </div>
-                    <div class="form-section" style="padding:1rem; margin-bottom: 1.5rem;">
-                        <h4>Create Sell Offer</h4>
-                        <p id="p2p-sell-offer-info-text" style="font-size:0.85rem; margin-bottom:1rem;">Enter the amount of COIN to sell. The price is fixed at 2x your last system purchase price.</p>
-                        <div class="form-inline-group">
-                            <div>
-                                <label for="sell-offer-amount"><i class="fas fa-coins"></i> Amount (COIN) to Sell:</label>
-                                <input type="number" id="sell-offer-amount" placeholder="e.g. 100">
-                            </div>
-                            <button onclick="createSellOffer()" class="accent" id="create-sell-offer-button" style="align-self: flex-end; margin-bottom: 1rem;"><i class="fas fa-plus-circle"></i> Create Offer</button>
-                        </div>
-                    </div>
-                    <h4>My Active & Past Sell Offers</h4>
-                    <div id="my-sell-offers-list" class="data-table-wrapper" style="margin-bottom: 2rem;">
-                        <p>You have not created any sell offers.</p>
-                    </div>
-                    <h4>Available Offers from Other Users</h4>
-                    <div id="available-offers-list">
-                        <p class="loading-text">No offers available at the moment.</p>
+                <div id="ud-my-assets" class="dashboard-card hidden">
+                    <h3><i class="fas fa-piggy-bank"></i> My Asset Programs</h3>
+                    <p>This section shows all your purchased asset programs. Once an asset matures, you can list it for sale on the P2P market.</p>
+                    <div id="user-assets-list" style="margin-top: 1.5rem;">
+                        <p>You have not purchased any asset programs yet.</p>
                     </div>
                 </div>
-                <!-- ##### MODIFIED SECTION END ##### -->
+                <div id="ud-p2p-market" class="dashboard-card hidden">
+                    <h3><i class="fas fa-exchange-alt"></i> My P2P Offers</h3>
+                    <div id="p2p-market-disabled-message" class="hidden" style="padding:1rem; background-color: #FFF3E0; border-left: 4px solid var(--warning-color); color: var(--text-dark); margin-bottom: 1rem;">
+                        <i class="fas fa-lock"></i> P2P market features are enabled after your first purchase from a Seller's Asset Program.
+                    </div>
+                    <p>Create sell offers from your "My Assets" page. Your active sell offers are shown below.</p>
+
+                    <h4 style="margin-top: 1.5rem;">My Active P2P Sale Offers</h4>
+                    <div id="my-sell-offers-list" class="data-table-wrapper" style="margin-bottom: 2rem;">
+                        <p>You have no active sell offers.</p>
+                    </div>
+                </div>
                 <div id="ud-pending-transactions" class="dashboard-card hidden">
                     <h3><i class="fas fa-hourglass-half"></i> My Pending Transactions</h3>
-                    <div id="pending-transactions-list"> <p>No pending transactions.</p> </div>
+                    <p>This section includes your pending payments for Seller Asset Programs and P2P purchases.</p>
+                    <div id="pending-transactions-list" style="margin-top: 1rem;"> <p>No pending transactions.</p> </div>
                 </div>
                 <div id="ud-p2p-history" class="dashboard-card hidden">
                     <h3><i class="fas fa-history"></i> My P2P Transaction History</h3>
                     <button onclick="exportP2PTransactionHistoryPDF()" class="secondary" style="float:right; margin-bottom:1rem;"><i class="fas fa-file-pdf"></i> Export PDF</button>
                     <div id="p2p-history-list" class="data-table-wrapper">
                         <p>No completed P2P transactions.</p>
-                    </div>
-                </div>
-                <div id="ud-investments" class="dashboard-card hidden">
-                    <h3><i class="fas fa-piggy-bank"></i> COIN Investment Program</h3>
-                    <p>Invest 1000 COIN for 7 days to get 3000 COIN back. Fixed term, fixed amount.</p>
-                    <button onclick="handleInvestment()" class="accent"><i class="fas fa-rocket"></i> Invest 1000 COIN</button>
-                    <h4 style="margin-top: 1.5rem;">My Active & Matured Investments</h4>
-                    <div id="active-investments-list">
-                        <p>No active investments.</p>
                     </div>
                 </div>
                 <div id="ud-withdraw-funds" class="dashboard-card hidden">
@@ -379,11 +362,12 @@
                     <li><button class="active" onclick="showAdminDashboardSection('ad-overview', this)"><i class="fas fa-tachometer-alt"></i> Overview & Stats</button></li>
                     <li><button onclick="showAdminDashboardSection('ad-users', this)"><i class="fas fa-users"></i> User Management</button></li>
                     <li><button onclick="showAdminDashboardSection('ad-kyc-requests', this)"><i class="fas fa-user-shield"></i> KYC Requests</button></li>
-                    <li><button onclick="showAdminDashboardSection('ad-withdrawal-requests', this)"><i class="fas fa-hand-holding-usd"></i> Withdrawal Requests</button></li>
+                    <li class="hidden"><button onclick="showAdminDashboardSection('ad-withdrawal-requests', this)"><i class="fas fa-hand-holding-usd"></i> Withdrawal Requests</button></li>
                     <li><button onclick="showAdminDashboardSection('ad-system-sale-config', this)"><i class="fas fa-cogs"></i> System Config</button></li>
-                    <li><button onclick="showAdminDashboardSection('ad-system-sale-requests', this)"><i class="fas fa-file-invoice-dollar"></i> System Sale Requests</button></li>
-                    <li><button onclick="showAdminDashboardSection('ad-p2p-tx', this)"><i class="fas fa-exchange-alt"></i> P2P Transactions</button></li>
-                    <li><button onclick="showAdminDashboardSection('ad-investments', this)"><i class="fas fa-chart-line"></i> All Investments</button></li>
+                    <li><button onclick="showAdminDashboardSection('ad-system-sale-requests', this)"><i class="fas fa-file-invoice-dollar"></i> Seller Sale Requests</button></li>
+                    <li><button onclick="showAdminDashboardSection('ad-manage-p2p-offers', this)"><i class="fas fa-tasks"></i> Manage P2P Offers</button></li>
+                    <li><button onclick="showAdminDashboardSection('ad-p2p-tx', this)"><i class="fas fa-exchange-alt"></i> Active P2P Transactions</button></li>
+                    <li><button onclick="showAdminDashboardSection('ad-user-assets', this)"><i class="fas fa-chart-line"></i> All User Assets</button></li>
                     <li><button onclick="showAdminDashboardSection('ad-support-tickets', this)"><i class="fas fa-life-ring"></i> Support Tickets</button></li>
                 </ul>
             </aside>
@@ -392,12 +376,12 @@
                     <h3><i class="fas fa-chart-bar"></i> Admin Overview & Stats</h3>
                     <div class="info-grid">
                         <div class="info-card"><strong><i class="fas fa-users"></i> Total Users</strong><span id="admin-stat-total-users">0</span></div>
-                        <div class="info-card"><strong><i class="fas fa-coins"></i> Total COINs in Circulation</strong><span id="admin-stat-total-coins">0</span></div>
-                        <div class="info-card"><strong><i class="fas fa-chart-line"></i> COINs in Active Investments</strong><span id="admin-stat-active-investments">0</span></div>
+                        <div class="info-card"><strong><i class="fas fa-coins"></i> Total COINs in Maturing Assets</strong><span id="admin-stat-total-coins">0</span></div>
+                        <div class="info-card"><strong><i class="fas fa-list-alt"></i> Active P2P Offers</strong><span id="admin-stat-active-p2p-offers">0</span></div>
                         <div class="info-card"><strong><i class="fas fa-user-clock"></i> Pending KYC Requests</strong><span id="admin-stat-pending-kyc">0</span></div>
                         <div class="info-card"><strong><i class="fas fa-hourglass-half"></i> Pending P2P Transactions</strong><span id="admin-stat-pending-p2p">0</span></div>
-                        <div class="info-card"><strong><i class="fas fa-shopping-cart"></i> Pending System Purchases</strong><span id="admin-stat-pending-system-purchases">0</span></div>
-                        <div class="info-card"><strong><i class="fas fa-hand-holding-usd"></i> Pending Withdrawals</strong><span id="admin-stat-pending-withdrawals">0</span></div>
+                        <div class="info-card"><strong><i class="fas fa-shopping-cart"></i> Pending Seller Purchases</strong><span id="admin-stat-pending-system-purchases">0</span></div>
+                        <div class="info-card hidden"><strong><i class="fas fa-hand-holding-usd"></i> Pending Withdrawals</strong><span id="admin-stat-pending-withdrawals">0</span></div>
                         <div class="info-card"><strong><i class="fas fa-envelope-open-text"></i> Open Support Tickets</strong><span id="admin-stat-open-support-tickets">0</span></div>
                     </div>
                 </div>
@@ -436,6 +420,15 @@
                         <p style="font-size:0.85rem; margin-top:0.5rem;">Current Default: <strong id="current-default-system-currency-display">USD</strong></p>
                     </div>
                     <div class="form-section" style="padding: 1rem; margin-bottom:1.5rem;">
+                        <h4>P2P Market Access Control</h4>
+                        <p style="font-size: 0.9rem; margin-bottom: 0.5rem;">Enable this to force all new users to make a purchase from the seller before accessing the P2P market. This can be bypassed per-user during KYC approval.</p>
+                        <label class="switch">
+                            <input type="checkbox" id="admin-p2p-access-toggle" onchange="toggleP2PRequirementDefault()">
+                            <span class="slider round"></span>
+                        </label>
+                        <span style="margin-left: 0.5rem; vertical-align: middle;" id="admin-p2p-access-status"></span>
+                    </div>
+                    <div class="form-section" style="padding: 1rem; margin-bottom:1.5rem;">
                         <h4>Sale Timers</h4>
                         <label for="admin-sale-duration">Sale Duration (seconds):</label>
                         <input type="number" id="admin-sale-duration" placeholder="e.g., 300 for 5 mins">
@@ -445,24 +438,43 @@
                     </div>
                     <div class="form-section" style="padding: 1rem;">
                         <form id="plan-form">
-                            <h4>Manage Sale Plans (All plans offer an 8% COIN bonus)</h4>
+                            <h4>Manage Seller's Asset Programs <small id="editing-plan-id" class="hidden">(Editing ID: <span></span>)</small></h4>
                             <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; margin-bottom:1rem;">
-                                <h5>Add New Plan / Edit Plan <small id="editing-plan-id" class="hidden">(Editing ID: <span></span>)</small></h5>
+                                <h5>Add New Plan / Edit Plan</h5>
                                 <label for="plan-name">Plan Name:</label>
                                 <input type="text" id="plan-name" placeholder="e.g., Starter Pack">
-                                <div class="form-inline-group">
-                                    <div>
+                                <div class="form-inline-group" style="display: flex; gap: 1rem; align-items: flex-end;">
+                                    <div style="flex-grow:1;">
                                         <label for="plan-cost">Cost:</label>
-                                        <input type="number" id="plan-cost" placeholder="e.g., 20">
+                                        <input type="number" id="plan-cost" placeholder="e.g., 20" style="margin-bottom:0;">
                                     </div>
-                                    <select id="plan-currency">
+                                    <select id="plan-currency" style="margin-bottom:0;">
                                         <option value="USD">USD</option>
                                         <option value="ZAR">ZAR</option>
                                         <option value="BTC">BTC</option>
                                     </select>
                                 </div>
-                                <label for="plan-coins-awarded">Base Coins Awarded (before 8% bonus):</label>
-                                <input type="number" id="plan-coins-awarded" placeholder="e.g., 40">
+                                <div class="form-inline-group" style="display: flex; gap: 1rem; margin-top: 1rem;">
+                                    <div style="flex-grow:1;">
+                                        <label for="plan-coins-awarded">Base Coins Awarded:</label>
+                                        <input type="number" id="plan-coins-awarded" placeholder="e.g., 40">
+                                    </div>
+                                    <div style="flex-grow:1;">
+                                        <label for="plan-return-percentage">Return Percentage (%):</label>
+                                        <input type="number" id="plan-return-percentage" placeholder="e.g., 50 for 50%">
+                                    </div>
+                                    <div style="flex-grow:1;">
+                                         <label for="plan-maturity-value">Maturity Duration:</label>
+                                        <div class="form-inline-group" style="display: flex; gap: 0.5rem; align-items: center;">
+                                            <input type="number" id="plan-maturity-value" placeholder="e.g., 7" style="margin-bottom:0; flex-grow: 1;">
+                                            <select id="plan-maturity-unit" style="margin-bottom:0; flex-grow: 1;">
+                                                <option value="Days">Days</option>
+                                                <option value="Hours">Hours</option>
+                                                <option value="Minutes">Minutes</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
                                 <label for="plan-bank-name">Seller Bank Name (for this plan):</label>
                                 <input type="text" id="plan-bank-name" placeholder="e.g., Seller Bank Inc.">
                                 <label for="plan-bank-account">Seller Bank Account No.:</label>
@@ -480,14 +492,21 @@
                     </div>
                 </div>
                 <div id="ad-system-sale-requests" class="dashboard-card hidden">
-                    <h3><i class="fas fa-file-invoice-dollar"></i> System Coin Purchase Requests from Users</h3>
+                    <h3><i class="fas fa-file-invoice-dollar"></i> Seller Asset Purchase Requests from Users</h3>
                     <button onclick="clearSystemSaleRequestsLogs()" class="danger" style="float:right; margin-bottom:1rem;"><i class="fas fa-trash-alt"></i> Clear All Logs</button>
                     <div id="admin-system-purchase-requests-list" class="data-table-wrapper">
-                        <p>No pending system purchase requests.</p>
+                        <p>No pending seller purchase requests.</p>
+                    </div>
+                </div>
+                <div id="ad-manage-p2p-offers" class="dashboard-card hidden">
+                    <h3><i class="fas fa-tasks"></i> Manage Active P2P Sell Offers</h3>
+                    <p>Manage all active P2P sell offers created by users. You can repackage or remove offers if necessary.</p>
+                    <div id="admin-p2p-offers-list" class="data-table-wrapper" style="margin-top: 1rem;">
+                        <p>No active P2P sell offers from users at the moment.</p>
                     </div>
                 </div>
                 <div id="ad-p2p-tx" class="dashboard-card hidden">
-                     <h3><i class="fas fa-exchange-alt"></i> P2P Transactions</h3>
+                     <h3><i class="fas fa-exchange-alt"></i> Active P2P Transactions</h3>
                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem;">
                         <div>
                             <label for="admin-p2p-filter-status" style="margin-right: 0.5rem; display:inline-block;">Filter by Status:</label>
@@ -508,10 +527,10 @@
                         <p class="loading-text">Loading transactions...</p>
                     </div>
                 </div>
-                <div id="ad-investments" class="dashboard-card hidden">
-                    <h3><i class="fas fa-chart-line"></i> All Investments</h3>
-                    <div id="admin-investments-area" class="data-table-wrapper">
-                       <p>No investments found.</p>
+                <div id="ad-user-assets" class="dashboard-card hidden">
+                    <h3><i class="fas fa-chart-line"></i> All User Assets</h3>
+                    <div id="admin-user-assets-area" class="data-table-wrapper">
+                       <p>No assets found in the system.</p>
                     </div>
                 </div>
                 <div id="ad-support-tickets" class="dashboard-card hidden">
@@ -569,6 +588,12 @@
                     <label for="admin-kyc-rejection-reason">Rejection Reason:</label>
                     <textarea id="admin-kyc-rejection-reason" rows="3"></textarea>
                 </div>
+                <div style="margin-top: 1rem; margin-bottom: 1rem; padding: 0.5rem; background-color: #f0f0f0; border-radius: 4px;">
+                     <label for="admin-kyc-p2p-bypass" style="display: flex; align-items: center; margin-bottom: 0;">
+                        <input type="checkbox" id="admin-kyc-p2p-bypass" style="width: auto; margin-right: 10px; margin-bottom: 0;"> 
+                        <span style="font-weight: normal;">Bypass initial seller purchase requirement for P2P access</span>
+                    </label>
+                </div>
                  <p id="admin-kyc-doc-display" style="margin-top:0.5rem; margin-bottom:0.5rem;">Current Document: None</p>
                  <label for="admin-kyc-new-document"><i class="fas fa-file-upload"></i> Upload New Document (Optional - replaces existing):</label>
                  <input type="file" id="admin-kyc-new-document" accept="image/*,.pdf">
@@ -576,9 +601,69 @@
             </div>
         </div>
     </div>
+    
+    <div id="admin-repackage-p2p-offer-modal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal-button" onclick="closeAdminRepackageP2POfferModal()">×</span>
+            <h3>Repackage P2P Offer</h3>
+            <p>Set new terms for this user's offer. The original coins will be used, but new buyers will see these terms.</p>
+            <input type="hidden" id="admin-repackage-p2p-offer-id">
+            
+            <div id="admin-repackage-p2p-original-details" style="background-color: #f8f9fa; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
+                <!-- Original offer details will be populated here -->
+            </div>
 
-    <footer>
-        <p>© <span id="currentYear"></span> P2P Reform Business. All Rights Reserved .</p>  
+            <label for="admin-repackage-plan-name">New Plan Name:</label>
+            <input type="text" id="admin-repackage-plan-name" placeholder="e.g., Premium P2P Growth" style="margin-bottom: 1rem;">
+            
+            <label for="admin-repackage-price">New Selling Price per COIN:</label>
+            <div class="form-inline-group" style="display: flex; gap: 1rem; align-items: flex-end;">
+                <div style="flex-grow:1;">
+                    <input type="number" id="admin-repackage-price" placeholder="e.g. 2.00" style="margin-bottom:0;">
+                </div>
+                <select id="admin-repackage-currency" style="margin-bottom:0;">
+                    <option value="USD">USD</option>
+                    <option value="ZAR">ZAR</option>
+                    <option value="BTC">BTC</option>
+                </select>
+            </div>
+            
+            <div class="form-inline-group" style="display: flex; gap: 1rem; margin-top: 1rem;">
+                <div style="flex-grow:1;">
+                    <label for="admin-repackage-return">New Return Percentage (%):</label>
+                    <input type="number" id="admin-repackage-return" placeholder="e.g., 25 for 25%">
+                </div>
+                <div style="flex-grow:1;">
+                     <label for="admin-repackage-maturity-value">New Maturity Duration:</label>
+                    <div class="form-inline-group" style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="number" id="admin-repackage-maturity-value" placeholder="e.g., 14" style="margin-bottom:0; flex-grow: 1;">
+                        <select id="admin-repackage-maturity-unit" style="margin-bottom:0; flex-grow: 1;">
+                            <option value="Days">Days</option>
+                            <option value="Hours">Hours</option>
+                            <option value="Minutes">Minutes</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <button onclick="saveAdminRepackageP2POffer()" class="accent" style="margin-top:1.5rem; width:100%;"><i class="fas fa-save"></i> Save Repackaged Offer</button>
+        </div>
+    </div>
+       <button onclick="saveAdminRepackageP2POffer()" class="accent" style="margin-top:1.5rem; width:100%;"><i class="fas fa-save"></i> Save Repackaged Offer</button>
+        </div>
+    </div>
+
+    <div id="proof-viewer-modal" class="modal">
+        <div class="modal-content" style="padding: 1rem; max-width: 90vw; width: auto; background: transparent; box-shadow: none;">
+             <span class="close-modal-button" onclick="closeProofViewerModal()" style="color:white; font-size:40px; top:20px; right:35px;">×</span>
+             <img id="proof-viewer-image" style="max-width: 100%; max-height: 85vh; display: block; margin: auto; border-radius: 8px; background-color: white;">
+             <p id="proof-viewer-caption" style="text-align:center; color:white; margin-top:1rem; font-weight: 500;"></p>
+        </div>
+    </div>
+
+    <footer >
+        <p>© <span id="currentYear"></span> P2P Reform Business. All Rights Reserved (Demo).</p>
+        <p>This is a fictional platform for demonstration purposes only.</p>
     </footer>
 
     <script src="script.js" defer></script>
