@@ -1687,13 +1687,7 @@ function listAssetOnP2P(assetId) {
     const newOfferMaturityDuration = originData.maturityDurationSeconds;
 
     // 6. Update the confirmation message to be clear and match the new logic.
-    const confirmationMessage = `This will list your <strong>entire liquid balance (${amountToList.toFixed(2)} COINs)</strong> on the P2P market. Your liquid balance will be set to 0 and these coins will be held for the sale.
-        <br><br>The offer will be automatically repackaged for the next buyer with the following terms:
-        <br><strong>Total Value:</strong> ${formatCurrency(newOfferTotalValue, newOfferCurrency)}
-        <br><strong>Price:</strong> ${formatCurrency(newOfferPricePerCoin, newOfferCurrency)} per COIN
-        <br><strong>Return:</strong> ${newOfferReturnPercentage}%
-        <br><strong>Maturity:</strong> ${formatDuration(newOfferMaturityDuration)}
-        <br><br>Do you want to proceed?`;
+    const confirmationMessage = `This will list your <strong>entire liquid balance (${amountToList.toFixed(2)} COINs)</strong> on the P2P market. Your liquid balance will be set to 0 and these coins will be held for the sale.<br><br>Do you want to proceed?`;
 
     // 7. Show the confirmation modal.
     showCustomConfirm(
