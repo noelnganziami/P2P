@@ -148,7 +148,7 @@
             <h3><i class="fas fa-info-circle"></i> About P2P Reform Business</h3>
             <p>P2P Reform Business is dedicated to revolutionizing how individuals interact with digital assets. Our platform provides a secure, transparent, and user-centric environment for peer-to-peer trading and strategic investments.</p>
             <p>Key features include a versatile P2P marketplace supporting various fiat currencies (USD, ZAR) and Bitcoin (BTC) for pricing COINs, alongside structured investment programs designed for asset growth. Additionally, users can purchase COINs directly from the system during admin-managed sale events. We simulate robust security measures, including escrow services and payment proof verification, to foster trust and safety within our community.</p>
-            <!--<p><em>Disclaimer: This platform is a demonstration project. No real financial transactions occur, and any resemblance to actual financial services is purely for illustrative purposes. Do not use real financial information.</em></p>-->
+            <p><em>Disclaimer: This platform is a demonstration project. No real financial transactions occur, and any resemblance to actual financial services is purely for illustrative purposes. Do not use real financial information.</em></p>
         </div>
     </div>
 
@@ -197,14 +197,14 @@
                 <h3><i class="fas fa-compass"></i> Navigation</h3>
                 <ul>
                     <li><button class="active" onclick="showUserDashboardSection('ud-overview', this)"><i class="fas fa-wallet"></i> Overview & Wallet</button></li>
-                    <li><button onclick="showUserDashboardSection('ud-kyc', this)"><i class="fas fa-user-shield"></i> KYC Verification</button></li>
-                    <li><button onclick="showUserDashboardSection('ud-system-sale', this)"><i class="fas fa-store"></i> Marketplace</button></li>
                     <li><button onclick="showUserDashboardSection('ud-my-assets', this)"><i class="fas fa-piggy-bank"></i> My Assets</button></li>
+                    <li><button onclick="showUserDashboardSection('ud-system-sale', this)"><i class="fas fa-store"></i> Marketplace</button></li>
                     <li><button onclick="showUserDashboardSection('ud-p2p-market', this)"><i class="fas fa-exchange-alt"></i> P2P Market</button></li>
                     <li><button onclick="showUserDashboardSection('ud-pending-transactions', this)"><i class="fas fa-hourglass-half"></i> Pending Transactions</button></li>
                     <li><button onclick="showUserDashboardSection('ud-p2p-history', this)"><i class="fas fa-history"></i> P2P History</button></li>
                     <li class="hidden"><button onclick="showUserDashboardSection('ud-withdraw-funds', this)"><i class="fas fa-money-bill-wave"></i> Withdraw Funds</button></li>
-                    <li><button onclick="showUserDashboardSection('ud-support-tickets', this)"><i class="fas fa-life-ring"></i> Support Tickets</button></li>
+                    <li><button onclick="showUserDashboardSection('ud-support-tickets', this)"><i class="fas fa-comments"></i> Live Support Chat</button></li>
+                    <li><button onclick="showUserDashboardSection('ud-kyc', this)"><i class="fas fa-user-shield"></i> KYC Verification</button></li>
                 </ul>
             </aside>
             <main class="dashboard-main-content">
@@ -227,9 +227,9 @@
                         <div class="info-grid">
                             <div class="info-card"><strong><i class="fas fa-envelope"></i> Email</strong><span id="profile-email"></span></div>
                             <div class="info-card"><strong><i class="fas fa-user-check"></i> KYC Status</strong><span id="profile-kyc-status" style="text-transform: capitalize;"></span></div>
-                            <div class="info-card"><strong><i class="fas fa-university"></i> Bank Name</strong><span id="profile-bank-name"></span></div>
-                            <div class="info-card"><strong><i class="fas fa-hashtag"></i> Bank Account</strong><span id="profile-bank-account"></span></div>
-                            <div class="info-card"><strong><i class="fab fa-bitcoin"></i> USDT Wallet</strong><span id="profile-usdt-wallet"></span></div>
+                            <div class="info-card hidden"><strong><i class="fas fa-university"></i> Bank Name</strong><span id="profile-bank-name"></span></div>
+                            <div class="info-card hidden"><strong><i class="fas fa-hashtag"></i> Bank Account</strong><span id="profile-bank-account"></span></div>
+                            <div class="info-card"><strong><i class="fab fa-bitcoin"></i> USDT Wallet (TRC20)</strong><span id="profile-usdt-wallet"></span></div>
                             <div class="info-card"><strong><i class="fas fa-phone"></i> Telephone</strong><span id="profile-telephone"></span></div>
                             <div class="info-card"><strong><i class="fas fa-globe"></i> Country</strong><span id="profile-country"></span></div>
                         </div>
@@ -243,11 +243,15 @@
                     </div>
                     <div id="kyc-form-area">
                         <p id="kyc-form-instructions">Please fill out your details below and upload a verification document (e.g., ID, Passport). You can update these details at any time, which may require re-verification.</p>
-                        <label for="kyc-bank-name"><i class="fas fa-university"></i> Bank Name:</label>
-                        <input type="text" id="kyc-bank-name" placeholder="Your Bank Name">
-                        <label for="kyc-bank-account"><i class="fas fa-hashtag"></i> Bank Account Number:</label>
-                        <input type="text" id="kyc-bank-account" placeholder="Your Bank Account Number">
-                        <label for="kyc-usdt-wallet"><i class="fab fa-bitcoin"></i> USDT Wallet Address (TRC20/ERC20):</label>
+                        <div class="hidden">
+                            <label for="kyc-bank-name"><i class="fas fa-university"></i> Bank Name:</label>
+                            <input type="text" id="kyc-bank-name" placeholder="Your Bank Name">
+                        </div>
+                        <div class="hidden">
+                            <label for="kyc-bank-account"><i class="fas fa-hashtag"></i> Bank Account Number:</label>
+                            <input type="text" id="kyc-bank-account" placeholder="Your Bank Account Number">
+                        </div>
+                        <label for="kyc-usdt-wallet"><i class="fab fa-bitcoin"></i> USDT Wallet Address (TRC20):</label>
                         <input type="text" id="kyc-usdt-wallet" placeholder="Your USDT Wallet Address">
                         <label for="kyc-telephone"><i class="fas fa-phone"></i> Telephone Number (with country code):</label>
                         <input type="text" id="kyc-telephone" placeholder="+1234567890">
@@ -333,7 +337,7 @@
                     </div>
                 </div>
                  <div id="ud-support-tickets" class="dashboard-card hidden">
-                    <h3><i class="fas fa-life-ring"></i> Support Tickets</h3>
+                    <h3><i class="fas fa-comments"></i> Live Support Chat</h3>
                     <div class="form-section" style="padding:1rem; margin-bottom: 2rem;">
                         <h4>Create New Ticket</h4>
                         <label for="ticket-subject"><i class="fas fa-heading"></i> Subject:</label>
@@ -342,7 +346,7 @@
                         <textarea id="ticket-message" rows="4" placeholder="Describe your issue or request..."></textarea>
                         <button onclick="createNewSupportTicket()" class="accent"><i class="fas fa-paper-plane"></i> Submit Ticket</button>
                     </div>
-                    <h4>My Tickets</h4>
+                    <h4>My Chat History</h4>
                     <div id="user-tickets-list" class="data-table-wrapper">
                         <p>You have not created any support tickets yet.</p>
                     </div>
@@ -420,6 +424,13 @@
                         <p style="font-size:0.85rem; margin-top:0.5rem;">Current Default: <strong id="current-default-system-currency-display">USD</strong></p>
                     </div>
                     <div class="form-section" style="padding: 1rem; margin-bottom:1.5rem;">
+                        <h4>Broadcast Message</h4>
+                        <label for="admin-broadcast-message">Set a message to be shown to all users on login:</label>
+                        <textarea id="admin-broadcast-message" rows="3" placeholder="Enter a promotional message or alert..."></textarea>
+                        <button onclick="setBroadcastMessage()" class="accent"><i class="fas fa-bullhorn"></i> Set Broadcast</button>
+                        <button onclick="clearBroadcastMessage()" class="secondary" style="margin-left: 10px;"><i class="fas fa-times-circle"></i> Clear Broadcast</button>
+                    </div>
+                    <div class="form-section" style="padding: 1rem; margin-bottom:1.5rem;">
                         <h4>P2P Market Access Control</h4>
                         <p style="font-size: 0.9rem; margin-bottom: 0.5rem;">Enable this to force all new users to make a purchase from the seller before accessing the P2P market. This can be bypassed per-user during KYC approval.</p>
                         <label class="switch">
@@ -475,11 +486,13 @@
                                         </div>
                                     </div>
                                 </div>
-                                <label for="plan-bank-name">Seller Bank Name (for this plan):</label>
-                                <input type="text" id="plan-bank-name" placeholder="e.g., Seller Bank Inc.">
-                                <label for="plan-bank-account">Seller Bank Account No.:</label>
-                                <input type="text" id="plan-bank-account" placeholder="e.g., 987654321">
-                                <label for="plan-btc-wallet">Seller BTC Wallet:</label>
+                                <div class="hidden">
+                                    <label for="plan-bank-name">Seller Bank Name (for this plan):</label>
+                                    <input type="text" id="plan-bank-name" placeholder="e.g., Seller Bank Inc.">
+                                    <label for="plan-bank-account">Seller Bank Account No.:</label>
+                                    <input type="text" id="plan-bank-account" placeholder="e.g., 987654321">
+                                </div>
+                                <label for="plan-btc-wallet">Seller USDT/BTC Wallet:</label>
                                 <input type="text" id="plan-btc-wallet" placeholder="Seller Bitcoin Address for this plan">
                                 <button type="button" onclick="handleAddOrUpdateSystemSalePlan()" class="accent" id="add-plan-button"><i class="fas fa-plus"></i> Add Plan</button>
                                 <button type="button" onclick="clearPlanEditForm()" class="secondary hidden" id="cancel-edit-plan-button"><i class="fas fa-times"></i> Cancel Edit</button>
@@ -549,7 +562,7 @@
             <h3 id="ticket-details-subject">Ticket Subject</h3>
             <p><small>Ticket ID: <span id="ticket-details-id"></span> | Status: <span id="ticket-details-status" style="text-transform:capitalize;"></span></small></p>
             <hr>
-            <div id="ticket-messages-container" style="max-height: 300px; overflow-y: auto; margin-bottom:1rem;">
+            <div id="ticket-messages-container">
                 <!-- Messages will be populated here -->
             </div>
             <div id="ticket-reply-area" class="ticket-reply-area">
@@ -567,11 +580,13 @@
             <h3 id="admin-edit-kyc-modal-title">Edit User KYC Details</h3>
             <input type="hidden" id="admin-edit-kyc-userId">
             <div>
-                <label for="admin-kyc-bank-name"><i class="fas fa-university"></i> Bank Name:</label>
-                <input type="text" id="admin-kyc-bank-name">
-                <label for="admin-kyc-bank-account"><i class="fas fa-hashtag"></i> Bank Account:</label>
-                <input type="text" id="admin-kyc-bank-account">
-                <label for="admin-kyc-usdt-wallet"><i class="fab fa-bitcoin"></i> USDT Wallet:</label>
+                <div class="hidden">
+                    <label for="admin-kyc-bank-name"><i class="fas fa-university"></i> Bank Name:</label>
+                    <input type="text" id="admin-kyc-bank-name">
+                    <label for="admin-kyc-bank-account"><i class="fas fa-hashtag"></i> Bank Account:</label>
+                    <input type="text" id="admin-kyc-bank-account">
+                </div>
+                <label for="admin-kyc-usdt-wallet"><i class="fab fa-bitcoin"></i> USDT Wallet (TRC20):</label>
                 <input type="text" id="admin-kyc-usdt-wallet">
                 <label for="admin-kyc-telephone"><i class="fas fa-phone"></i> Telephone:</label>
                 <input type="text" id="admin-kyc-telephone">
@@ -616,9 +631,9 @@
             <label for="admin-repackage-plan-name">New Plan Name:</label>
             <input type="text" id="admin-repackage-plan-name" placeholder="e.g., Premium P2P Growth" style="margin-bottom: 1rem;">
             
-            <label for="admin-repackage-price">New Selling Price per COIN:</label>
-            <div class="form-inline-group" style="display: flex; gap: 1rem; align-items: flex-end;">
+            <div class="form-inline-group hidden" style="display: flex; gap: 1rem; align-items: flex-end;">
                 <div style="flex-grow:1;">
+                    <label for="admin-repackage-price">New Selling Price per COIN:</label>
                     <input type="number" id="admin-repackage-price" placeholder="e.g. 2.00" style="margin-bottom:0;">
                 </div>
                 <select id="admin-repackage-currency" style="margin-bottom:0;">
@@ -628,7 +643,7 @@
                 </select>
             </div>
             
-            <div class="form-inline-group" style="display: flex; gap: 1rem; margin-top: 1rem;">
+            <div class="form-inline-group hidden" style="display: flex; gap: 1rem; margin-top: 1rem;">
                 <div style="flex-grow:1;">
                     <label for="admin-repackage-return">New Return Percentage (%):</label>
                     <input type="number" id="admin-repackage-return" placeholder="e.g., 25 for 25%">
@@ -645,13 +660,10 @@
                     </div>
                 </div>
             </div>
-            <!--<div>
+
             <button onclick="saveAdminRepackageP2POffer()" class="accent" style="margin-top:1.5rem; width:100%;"><i class="fas fa-save"></i> Save Repackaged Offer</button>
         </div>
     </div>
-       <button onclick="saveAdminRepackageP2POffer()" class="accent" style="margin-top:1.5rem; width:100%;"><i class="fas fa-save"></i> Save Repackaged Offer</button>
-        </div>
-    </div>-->
 
     <div id="proof-viewer-modal" class="modal">
         <div class="modal-content" style="padding: 1rem; max-width: 90vw; width: auto; background: transparent; box-shadow: none;">
@@ -662,9 +674,8 @@
     </div>
 
     <footer >
-        <p>© <span id="currentYear"></span> P2P Reform Business. All Rights Reserved.</p>
-       
-        
+        <p>© <span id="currentYear"></span> P2P Reform Business. All Rights Reserved (Demo).</p>
+        <p>This is a fictional platform for demonstration purposes only.</p>
     </footer>
 
     <script src="script.js" defer></script>

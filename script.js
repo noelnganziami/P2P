@@ -6,7 +6,9 @@ users = users.map(user => ({
     walletBalance: user.walletBalance || { USD: 0, ZAR: 0, BTC: 0 },
     hasMadeInitialSystemPurchase: user.hasMadeInitialSystemPurchase === undefined ? false : user.hasMadeInitialSystemPurchase,
     p2pMarketRequiresInitialPurchase: user.p2pMarketRequiresInitialPurchase === undefined ? true : user.p2pMarketRequiresInitialPurchase,
-    coinBalance: user.coinBalance === undefined ? 0 : parseFloat(user.coinBalance)
+    coinBalance: user.coinBalance === undefined ? 0 : parseFloat(user.coinBalance),
+    isAdmin: user.isAdmin === undefined ? false : user.isAdmin,
+    kycData: user.kycData || { usdtWallet: '', btcWallet: '', telephone: '', country: '', documentUrl: null, documentFilename: null, rejectionReason: null, submittedAt: null },
 }));
 
 let transactions = JSON.parse(localStorage.getItem('p2p_reform_transactions')) || [];
@@ -21,19 +23,23 @@ let systemSaleConfig = JSON.parse(localStorage.getItem('p2p_reform_system_sale_c
     saleDurationSeconds: 300,
     cooldownDurationSeconds: 60,
     defaultSystemCurrency: "USD",
-    p2pRequirementEnabled: true
+    p2pRequirementEnabled: true,
+    broadcastMessage: ''
 };
 
 let systemSalePlans = JSON.parse(localStorage.getItem('p2p_reform_system_sale_plans')) || [];
-// Simple migration for old data structure with maturityDays
+// Simple migration for old data structures
 systemSalePlans = systemSalePlans.map(plan => {
     if (plan.maturityDays && !plan.maturityDurationSeconds) {
         plan.maturityDurationSeconds = plan.maturityDays * 86400; // Convert days to seconds
         delete plan.maturityDays; // Remove old property
     }
-    // Ensure all plans have a duration, default to 7 days if somehow missing
     if (!plan.maturityDurationSeconds) {
         plan.maturityDurationSeconds = 7 * 86400;
+    }
+    if (plan.planBtcWallet && !plan.planUsdtWallet) {
+        plan.planUsdtWallet = plan.planBtcWallet;
+        delete plan.planBtcWallet;
     }
     return plan;
 });
@@ -42,9 +48,7 @@ systemSalePlans = systemSalePlans.map(plan => {
 const ADMIN_EMAIL = "scothyjunior@gmail.com";
 const ADMIN_PASSWORD = "Djsthy@2020";
 
-let saleCycleInterval;
-let coinSaleActive = false;
-let currentPhaseTimeLeft = 0;
+let saleCycleInterval = null;
 let saleNotificationShown = false;
 
 let userCoinChartInstance = null;
@@ -106,7 +110,7 @@ function switchView(viewId, skipHistory = false) {
     if (viewElement) {
         viewElement.classList.remove('hidden');
         currentViewId = viewId;
-        window.scrollTo(0, 0); // Scroll to top on view change
+        window.scrollTo(0, 0); 
         if (!skipHistory) {
             sessionStorage.setItem('p2p_reform_currentView', viewId);
             if (viewId !== 'user-dashboard-view' && viewId !== 'admin-dashboard-view') {
@@ -116,6 +120,11 @@ function switchView(viewId, skipHistory = false) {
         }
     } else {
         console.error(`SwitchView: View with ID '${viewId}' not found.`);
+        const landingPage = document.getElementById('landing-page-view');
+        if (landingPage) {
+            landingPage.classList.remove('hidden');
+            currentViewId = 'landing-page-view';
+        }
     }
 
     const isLoggedIn = currentUser !== null;
@@ -143,6 +152,7 @@ function displayNotification(message, type = 'info') {
     const modal = document.getElementById('popup-notification-modal');
     const titleEl = document.getElementById('popup-notification-title');
     const messageEl = document.getElementById('popup-notification-message');
+    if (!modal || !titleEl || !messageEl) return;
     let iconHtml = '';
 
     titleEl.className = type;
@@ -166,18 +176,26 @@ function displayNotification(message, type = 'info') {
             break;
     }
     titleEl.innerHTML = iconHtml + titleEl.textContent;
-    messageEl.innerHTML = message; // Use innerHTML for potential line breaks
+    messageEl.innerHTML = message;
     modal.style.display = 'block';
 }
+
 function closePopupNotificationModal() {
-    document.getElementById('popup-notification-modal').style.display = 'none';
+    const modal = document.getElementById('popup-notification-modal');
+    if (modal) {
+        modal.classList.add('closing');
+        setTimeout(() => {
+            modal.style.display = 'none';
+            modal.classList.remove('closing');
+        }, 300); // Must match CSS animation duration
+    }
 }
 
 let confirmCallback = null;
 let promptCallback = null;
 
 function showCustomConfirm(message, onConfirm, title = "Confirmation", okButtonText = "OK", okButtonClass = "danger") {
-    document.getElementById('custom-confirm-message').innerHTML = message; // Use innerHTML to support simple tags like <br>
+    document.getElementById('custom-confirm-message').innerHTML = message;
     document.getElementById('custom-confirm-title').textContent = title;
     const okButton = document.getElementById('custom-confirm-ok-button');
     okButton.textContent = okButtonText;
@@ -188,7 +206,14 @@ function showCustomConfirm(message, onConfirm, title = "Confirmation", okButtonT
 }
 
 function closeCustomConfirmModal(isConfirmed) {
-    document.getElementById('custom-confirm-modal').style.display = 'none';
+    const modal = document.getElementById('custom-confirm-modal');
+    if (modal) {
+        modal.classList.add('closing');
+        setTimeout(() => {
+            modal.style.display = 'none';
+            modal.classList.remove('closing');
+        }, 300);
+    }
     if (isConfirmed && typeof confirmCallback === 'function') {
         confirmCallback();
     }
@@ -208,7 +233,15 @@ function showCustomPrompt(message, defaultValue = "", onPrompt, title = "Input R
 function closeCustomPromptModal(isSubmitted) {
     const modal = document.getElementById('custom-prompt-modal');
     const inputField = document.getElementById('custom-prompt-input');
-    modal.style.display = 'none';
+    
+    if (modal) {
+        modal.classList.add('closing');
+        setTimeout(() => {
+            modal.style.display = 'none';
+            modal.classList.remove('closing');
+        }, 300);
+    }
+
     if (isSubmitted && typeof promptCallback === 'function') {
         promptCallback(inputField.value);
     } else if (typeof promptCallback === 'function') {
@@ -227,7 +260,6 @@ function openProofViewerModal(dataUrl, caption = '') {
         cap.textContent = caption;
         modal.style.display = 'block';
     } else if (dataUrl) {
-        // Fallback for non-image data URLs or external links
         window.open(dataUrl, '_blank');
     }
 }
@@ -235,11 +267,14 @@ function openProofViewerModal(dataUrl, caption = '') {
 function closeProofViewerModal() {
     const modal = document.getElementById('proof-viewer-modal');
     if (modal) {
-        modal.style.display = 'none';
-        document.getElementById('proof-viewer-image').src = ''; // Clear image
+        modal.classList.add('closing');
+        setTimeout(() => {
+            modal.style.display = 'none';
+            modal.classList.remove('closing');
+            document.getElementById('proof-viewer-image').src = '';
+        }, 300);
     }
 }
-
 
 function addGlobalNotification(targetUserIdOrAdmin, title, message, link = '#', type = 'info') {
     const newNotification = {
@@ -305,7 +340,10 @@ function renderNotificationPanel() {
                 <p>${n.message}</p>
                 <small>${new Date(n.timestamp).toLocaleString()}</small>
             `;
-            n.read = true;
+            const originalNotification = globalNotifications.find(gn => gn.id === n.id);
+            if (originalNotification) {
+                originalNotification.read = true;
+            }
             panelList.appendChild(itemDiv);
         });
         saveState();
@@ -316,12 +354,13 @@ function generateId() { return Math.random().toString(36).substr(2, 9) + Date.no
 
 function formatCurrency(value, currency = "USD") {
     const symbols = { USD: '$', ZAR: 'R' };
-    if (currency === 'BTC') {
-        const numValue = parseFloat(value);
-        return isNaN(numValue) ? '0.00000000 BTC' : numValue.toFixed(8) + ' BTC';
-    }
     const numValue = parseFloat(value);
-    return (symbols[currency] || currency + ' ') + (isNaN(numValue) ? '0.00' : numValue.toFixed(2));
+    if (isNaN(numValue)) return (symbols[currency] || currency + ' ') + '0.00';
+    
+    if (currency === 'BTC') {
+        return numValue.toFixed(8) + ' BTC';
+    }
+    return (symbols[currency] || currency + ' ') + numValue.toFixed(2);
 }
 
 function formatDuration(seconds) {
@@ -347,10 +386,28 @@ function deconstructDuration(seconds) {
     if (seconds >= 60 && seconds % 60 === 0) {
         return { value: seconds / 60, unit: 'Minutes' };
     }
-    // Fallback for weird numbers (e.g. from old data or manual edit), just show in minutes.
     return { value: Math.round(seconds / 60), unit: 'Minutes' };
 }
 
+function escapeHTML(str) {
+    if (typeof str !== 'string') return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+function getInputValue(id, defaultValue = '') {
+    const element = document.getElementById(id);
+    return element ? element.value : defaultValue;
+}
+
+function getCheckedValue(id, defaultValue = false) {
+    const element = document.getElementById(id);
+    return element ? element.checked : defaultValue;
+}
+
+function getFileInput(id) {
+    const element = document.getElementById(id);
+    return element ? element.files[0] : null;
+}
 
 function togglePasswordVisibility(inputId) {
     const passwordInput = document.getElementById(inputId);
@@ -377,6 +434,11 @@ function populateCountryDropdown(selectElementId, selectedCountry = null) {
 }
 
 function showUserDashboardSection(sectionId, buttonElement, skipHistory = false) {
+    if (saleCycleInterval) {
+        clearInterval(saleCycleInterval);
+        saleCycleInterval = null;
+    }
+
     document.querySelectorAll('#user-dashboard-view .dashboard-main-content .dashboard-card').forEach(s => s.classList.add('hidden'));
     const sectionToShow = document.getElementById(sectionId);
     if(sectionToShow) sectionToShow.classList.remove('hidden');
@@ -386,21 +448,34 @@ function showUserDashboardSection(sectionId, buttonElement, skipHistory = false)
     currentDashboardSectionId.user = sectionId;
     if (!skipHistory) sessionStorage.setItem('p2p_reform_userSection', sectionId);
     
-    // Clear asset countdown interval when leaving the 'My Assets' page
     if (sectionId !== 'ud-my-assets' && userAssetCountdownInterval) {
         clearInterval(userAssetCountdownInterval);
         userAssetCountdownInterval = null;
     }
     
-    const isP2PLocked = (currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase);
-
     if (sectionId === 'ud-system-sale') {
-        updateSystemSaleUserView();
-        const initialSystemPurchaseMessage = document.getElementById('system-sale-initial-purchase-message');
-         if (initialSystemPurchaseMessage) {
-            const showMessage = currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase;
-            initialSystemPurchaseMessage.classList.toggle('hidden', !showMessage);
-        }
+        const tick = () => {
+            let cycleState = JSON.parse(localStorage.getItem('p2p_reform_sale_cycle_state')) || {};
+            const now = Date.now();
+
+            if (!cycleState.phaseEndTime || now >= cycleState.phaseEndTime) {
+                const wasSale = cycleState.phase === 'sale';
+                const nextPhase = wasSale ? 'cooldown' : 'sale';
+                const nextDuration = wasSale ? systemSaleConfig.cooldownDurationSeconds : systemSaleConfig.saleDurationSeconds;
+                cycleState = {
+                    phase: nextPhase,
+                    phaseEndTime: now + (nextDuration * 1000)
+                };
+                localStorage.setItem('p2p_reform_sale_cycle_state', JSON.stringify(cycleState));
+            }
+            
+            const timeLeftSeconds = Math.max(0, Math.floor((cycleState.phaseEndTime - now) / 1000));
+            const isSaleActive = cycleState.phase === 'sale';
+            updateSystemSaleUserView(isSaleActive, timeLeftSeconds);
+        };
+
+        saleCycleInterval = setInterval(tick, 1000);
+        tick();
     }
     if (sectionId === 'ud-kyc') {
         renderKycForm();
@@ -409,15 +484,17 @@ function showUserDashboardSection(sectionId, buttonElement, skipHistory = false)
         renderUserAssets();
     }
     if (sectionId === 'ud-p2p-market') {
-        document.getElementById('p2p-market-disabled-message').classList.toggle('hidden', !isP2PLocked);
         renderMySellOffers();
+    }
+    if (sectionId === 'ud-pending-transactions') {
+        renderUserPendingTransactions();
     }
     if (sectionId === 'ud-withdraw-funds') {
         renderUserWithdrawalHistory();
-        populateWithdrawalDestination(); // Initialize based on default currency
+        populateWithdrawalDestination(); 
         const withdrawCurrencySelect = document.getElementById('withdraw-currency');
         if (withdrawCurrencySelect) {
-            withdrawCurrencySelect.removeEventListener('change', populateWithdrawalDestination); // Remove old if any
+            withdrawCurrencySelect.removeEventListener('change', populateWithdrawalDestination);
             withdrawCurrencySelect.addEventListener('change', populateWithdrawalDestination);
         }
     }
@@ -450,6 +527,15 @@ function showAdminDashboardSection(sectionId, buttonElement, skipHistory = false
     if (sectionId === 'ad-withdrawal-requests') {
         renderAdminWithdrawalRequests();
     }
+    if (sectionId === 'ad-p2p-tx') { // Changed from ad-p2p-transactions to match HTML
+        renderAdminP2PTransactions();
+    }
+     if (sectionId === 'ad-system-sale-requests') {
+        renderAdminSystemPurchaseRequests();
+    }
+    if (sectionId === 'ad-users') { // Changed from ad-manage-users
+        renderAdminUserList();
+    }
 }
 
 function handleLogoClick() {
@@ -466,16 +552,14 @@ function handleDashboardNavClick() {
     if (currentUser) {
         if (currentUser.isAdmin) {
             switchView('admin-dashboard-view');
-            const adminOverviewButton = document.querySelector('#admin-dashboard-view .dashboard-sidebar button[onclick*="ad-overview"]');
-            const targetAdminSection = currentDashboardSectionId.admin || 'ad-overview';
-            const targetAdminButton = document.querySelector(`#admin-dashboard-view .dashboard-sidebar button[onclick*="'${targetAdminSection}'"]`) || adminOverviewButton;
-            showAdminDashboardSection(targetAdminSection, targetAdminButton);
+            const targetAdminSection = sessionStorage.getItem('p2p_reform_adminSection') || 'ad-overview';
+            const targetAdminButton = document.querySelector(`#admin-dashboard-view .dashboard-sidebar button[onclick*="'${targetAdminSection}'"]`) || document.querySelector('#admin-dashboard-view .dashboard-sidebar button[onclick*="ad-overview"]');
+            showAdminDashboardSection(targetAdminSection, targetAdminButton, true);
         } else {
             switchView('user-dashboard-view');
-            const userOverviewButton = document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-overview"]');
-            const targetUserSection = currentDashboardSectionId.user || 'ud-overview';
-            const targetUserButton = document.querySelector(`#user-dashboard-view .dashboard-sidebar button[onclick*="'${targetUserSection}'"]`) || userOverviewButton;
-            showUserDashboardSection(targetUserSection, targetUserButton);
+            const targetUserSection = sessionStorage.getItem('p2p_reform_userSection') || 'ud-overview';
+            const targetUserButton = document.querySelector(`#user-dashboard-view .dashboard-sidebar button[onclick*="'${targetUserSection}'"]`) || document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-overview"]');
+            showUserDashboardSection(targetUserSection, targetUserButton, true);
         }
         setActiveLink(document.getElementById('nav-dashboard'));
     } else {
@@ -484,11 +568,38 @@ function handleDashboardNavClick() {
     }
 }
 
+// --- Robust Asset Maturation ---
+/**
+ * Checks for and processes any matured assets for a given user.
+ * This function MUTATES the user and asset objects but does NOT save state.
+ * The calling function is responsible for calling saveState().
+ * @param {object} user - The user object to check assets for.
+ * @returns {boolean} - True if any assets were matured, false otherwise.
+ */
+function checkAndProcessMaturedAssets(user) {
+    if (!user) return false;
+    let hasMatured = false;
+    userAssets.filter(asset => asset.userId === user.id && (asset.status === 'maturing' || asset.status === 'repackaged_profit_maturing'))
+        .forEach(asset => {
+            const maturityDate = new Date(asset.maturityDate);
+            if (new Date() >= maturityDate) {
+                // Found a matured asset
+                user.coinBalance = parseFloat(user.coinBalance || 0) + parseFloat(asset.totalReturnCoins);
+                asset.status = 'credited';
+                hasMatured = true;
+                
+                addGlobalNotification(user.id, "Asset Matured!", `Your asset "${asset.planName}" has matured. ${asset.totalReturnCoins.toFixed(2)} COINs credited to your balance.`, 'ud-my-assets', 'success');
+            }
+        });
+    return hasMatured;
+}
+
+
 // --- Authentication ---
 function handleRegister() {
-    const name = document.getElementById('reg-name').value.trim();
-    const email = document.getElementById('reg-email').value.trim().toLowerCase();
-    const password = document.getElementById('reg-password').value;
+    const name = getInputValue('reg-name').trim();
+    const email = getInputValue('reg-email').trim().toLowerCase();
+    const password = getInputValue('reg-password');
 
     if (!name || !email || !password) { displayNotification('Name, email, and password are required.', 'error'); return; }
     if (!/\S+@\S+\.\S+/.test(email)) { displayNotification('Valid email required.', 'error'); return; }
@@ -496,16 +607,18 @@ function handleRegister() {
 
     const newUser = {
         id: generateId(), name, email, password,
+        isAdmin: false, 
         coinBalance: 0,
         walletBalance: { USD: 0, ZAR: 0, BTC: 0 },
         hasMadeInitialSystemPurchase: false,
         p2pMarketRequiresInitialPurchase: systemSaleConfig.p2pRequirementEnabled,
         status: 'active',
         kycStatus: 'none',
-        kycData: { bankName: '', bankAccount: '', usdtWallet: '', telephone: '', country: '', documentUrl: null, documentFilename: null, rejectionReason: null },
+        kycData: { usdtWallet: '', btcWallet: '', telephone: '', country: '', documentUrl: null, documentFilename: null, rejectionReason: null, submittedAt: null },
     };
     users.push(newUser);
     currentUser = newUser;
+    sessionStorage.setItem('p2p_reform_currentUser', JSON.stringify(currentUser));
     saveState();
     switchView('user-dashboard-view');
     renderUserDashboard();
@@ -516,11 +629,12 @@ function handleRegister() {
 }
 
 function handleLogin() {
-    const email = document.getElementById('login-email').value.trim().toLowerCase();
-    const password = document.getElementById('login-password').value;
+    const email = getInputValue('login-email').trim().toLowerCase();
+    const password = getInputValue('login-password');
 
     if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
         currentUser = { isAdmin: true, name: "Administrator", id: "admin_user" };
+        sessionStorage.setItem('p2p_reform_currentUser', JSON.stringify(currentUser));
         switchView('admin-dashboard-view');
         renderAdminDashboard();
         setActiveLink(document.getElementById('nav-dashboard'));
@@ -531,24 +645,32 @@ function handleLogin() {
     if (user) {
         if (user.status === 'blocked') { displayNotification('Account blocked. Contact support.', 'error'); return; }
         currentUser = user;
-        currentUser.kycData = currentUser.kycData || { bankName: '', bankAccount: '', usdtWallet: '', telephone: '', country: '', documentUrl: null, documentFilename: null, rejectionReason: null };
+
+        // Check for any assets that matured while user was away and save state if they did
+        if (checkAndProcessMaturedAssets(currentUser)) {
+            saveState();
+        }
+        
+        // Ensure user object has all modern properties to prevent errors
+        currentUser.kycData = currentUser.kycData || { usdtWallet: '', btcWallet: '', telephone: '', country: '', documentUrl: null, documentFilename: null, rejectionReason: null, submittedAt: null };
         currentUser.walletBalance = currentUser.walletBalance || { USD: 0, ZAR: 0, BTC: 0 };
         currentUser.hasMadeInitialSystemPurchase = currentUser.hasMadeInitialSystemPurchase === undefined ? false : currentUser.hasMadeInitialSystemPurchase;
         currentUser.p2pMarketRequiresInitialPurchase = currentUser.p2pMarketRequiresInitialPurchase === undefined ? true : currentUser.p2pMarketRequiresInitialPurchase;
         currentUser.coinBalance = currentUser.coinBalance === undefined ? 0 : parseFloat(currentUser.coinBalance);
         currentUser.kycStatus = currentUser.kycStatus || 'none';
+        
+        sessionStorage.setItem('p2p_reform_currentUser', JSON.stringify(currentUser));
         saveState();
 
         switchView('user-dashboard-view');
         renderUserDashboard();
         setActiveLink(document.getElementById('nav-dashboard'));
+        checkBroadcastMessage();
+
         if (currentUser.kycStatus === 'none') {
              displayNotification("Welcome! Please complete your KYC verification to access all features.", "warning");
              addGlobalNotification(currentUser.id, "KYC Needed", "Please complete your KYC to access all features.", "ud-kyc", "warning");
              showUserDashboardSection('ud-kyc', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-kyc"]'));
-        } else if (currentUser.kycStatus === 'approved' && !currentUser.hasMadeInitialSystemPurchase && currentUser.p2pMarketRequiresInitialPurchase) {
-            displayNotification("Welcome! Please purchase your first Asset Program to get started.", "info");
-            showUserDashboardSection('ud-system-sale', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-system-sale"]'));
         }
     } else { displayNotification('Invalid email or password.', 'error'); }
 }
@@ -560,9 +682,15 @@ function handleLogout() {
     sessionStorage.removeItem('p2p_reform_adminSection');
     currentUser = null;
 
-    if (saleCycleInterval) clearInterval(saleCycleInterval);
-    if (userAssetCountdownInterval) clearInterval(userAssetCountdownInterval);
-    coinSaleActive = false;
+    if (saleCycleInterval) {
+        clearInterval(saleCycleInterval);
+        saleCycleInterval = null;
+    }
+    if (userAssetCountdownInterval) {
+        clearInterval(userAssetCountdownInterval);
+        userAssetCountdownInterval = null;
+    }
+
     saleNotificationShown = false;
     const coinBalanceCard = document.getElementById('user-coin-balance-card');
     if(coinBalanceCard) coinBalanceCard.classList.remove('sale-active-balance');
@@ -582,8 +710,6 @@ function renderUserDashboard() {
 
     document.getElementById('profile-email').textContent = currentUser.email;
     document.getElementById('profile-kyc-status').textContent = currentUser.kycStatus || 'None';
-    document.getElementById('profile-bank-name').textContent = currentUser.kycData?.bankName || 'N/A';
-    document.getElementById('profile-bank-account').textContent = currentUser.kycData?.bankAccount || 'N/A';
     document.getElementById('profile-usdt-wallet').textContent = currentUser.kycData?.usdtWallet || 'N/A';
     document.getElementById('profile-telephone').textContent = currentUser.kycData?.telephone || 'N/A';
     document.getElementById('profile-country').textContent = currentUser.kycData?.country || 'N/A';
@@ -592,7 +718,6 @@ function renderUserDashboard() {
     renderWalletBalances();
 
     renderUserCoinChart();
-    initializeSystemSaleCycle();
     renderUserPendingTransactions();
     renderMySellOffers();
     renderUserAssets();
@@ -663,7 +788,6 @@ function renderUserCoinChart() {
     if (!chartCanvas) return;
     const ctx = chartCanvas.getContext('2d');
 
-    // Total coins that will eventually become liquid.
     const totalMaturing = userAssets
         .filter(asset => asset.userId === currentUser.id && (asset.status === 'maturing' || asset.status === 'repackaged_profit_maturing'))
         .reduce((sum, asset) => sum + asset.totalReturnCoins, 0);
@@ -707,8 +831,6 @@ function renderKycForm() {
     const kycFormInstructions = document.getElementById('kyc-form-instructions');
     const kycApprovedUpdateInfo = document.getElementById('kyc-approved-update-info');
 
-    const kycBankNameInput = document.getElementById('kyc-bank-name');
-    const kycBankAccountInput = document.getElementById('kyc-bank-account');
     const kycUsdtWalletInput = document.getElementById('kyc-usdt-wallet');
     const kycTelephoneInput = document.getElementById('kyc-telephone');
     const kycCountrySelect = document.getElementById('kyc-country');
@@ -726,12 +848,12 @@ function renderKycForm() {
     submitKycButton.classList.remove('hidden');
     kycFormInstructions.classList.remove('hidden');
 
-    [kycBankNameInput, kycBankAccountInput, kycUsdtWalletInput, kycTelephoneInput, kycCountrySelect, kycDocumentInput].forEach(el => el.disabled = false);
+    [kycUsdtWalletInput, kycTelephoneInput, kycCountrySelect, kycDocumentInput].forEach(el => {
+        if (el) el.disabled = false;
+    });
 
     if (currentUser.kycStatus === 'none' || currentUser.kycStatus === 'rejected') {
         kycFormArea.classList.remove('hidden');
-        kycBankNameInput.value = currentUser.kycData?.bankName || '';
-        kycBankAccountInput.value = currentUser.kycData?.bankAccount || '';
         kycUsdtWalletInput.value = currentUser.kycData?.usdtWallet || '';
         kycTelephoneInput.value = currentUser.kycData?.telephone || '';
         document.getElementById('kyc-uploaded-file-name').textContent = currentUser.kycData?.documentFilename ? `Current document: ${currentUser.kycData.documentFilename}` : 'No document uploaded yet.';
@@ -748,12 +870,12 @@ function renderKycForm() {
         kycFormInstructions.classList.add('hidden');
         kycApprovedUpdateInfo.classList.remove('hidden');
 
-        kycBankNameInput.value = currentUser.kycData?.bankName || '';
-        kycBankAccountInput.value = currentUser.kycData?.bankAccount || '';
         kycUsdtWalletInput.value = currentUser.kycData?.usdtWallet || '';
         kycTelephoneInput.value = currentUser.kycData?.telephone || '';
 
-        [kycBankNameInput, kycBankAccountInput, kycUsdtWalletInput, kycTelephoneInput, kycCountrySelect, kycDocumentInput].forEach(el => el.disabled = true);
+        [kycUsdtWalletInput, kycTelephoneInput, kycCountrySelect, kycDocumentInput].forEach(el => {
+            if (el) el.disabled = true;
+        });
         submitKycButton.classList.add('hidden');
         document.getElementById('kyc-uploaded-file-name').textContent = currentUser.kycData?.documentFilename ? `Current document: ${currentUser.kycData.documentFilename}` : 'No document provided.';
     }
@@ -764,7 +886,7 @@ function submitKycForm() {
         displayNotification('You must be logged in to submit KYC.', 'error');
         return;
     }
-     if (currentUser.kycStatus === 'pending') {
+    if (currentUser.kycStatus === 'pending') {
         displayNotification('KYC is currently pending approval. Please wait.', 'info');
         return;
     }
@@ -772,93 +894,68 @@ function submitKycForm() {
         displayNotification('Your KYC is already approved. Contact support for updates.', 'info');
         return;
     }
+    
+    const kycUsdtWallet = getInputValue('kyc-usdt-wallet').trim();
+    // FIX: Removed reference to non-existent 'kyc-btc-wallet' in the user form. Admin can still edit it.
+    const kycTelephone = getInputValue('kyc-telephone').trim();
+    const kycCountry = getInputValue('kyc-country');
+    const kycDocumentFile = getFileInput('kyc-document');
 
-    const kycBankName = document.getElementById('kyc-bank-name').value.trim();
-    const kycBankAccount = document.getElementById('kyc-bank-account').value.trim();
-    const kycUsdtWallet = document.getElementById('kyc-usdt-wallet').value.trim();
-    const kycTelephone = document.getElementById('kyc-telephone').value.trim();
-    const kycCountry = document.getElementById('kyc-country').value;
-    const kycDocumentFile = document.getElementById('kyc-document').files[0];
-
-    if(!kycBankName && !kycUsdtWallet && !kycBankAccount){ displayNotification('Please provide at least Bank details or a USDT Wallet.', 'warning'); return;}
-    if(!kycTelephone || !kycCountry){ displayNotification('Telephone and Country are required.', 'error'); return;}
-
-    let needsDocUpload = true;
-    if (currentUser.kycData?.documentUrl && !kycDocumentFile) {
-        needsDocUpload = false;
-    } else if (!kycDocumentFile && !currentUser.kycData?.documentUrl) {
-         displayNotification('Please upload a verification document.', 'error'); return;
-    }
-
-    currentUser.kycData.bankName = kycBankName;
-    currentUser.kycData.bankAccount = kycBankAccount;
-    currentUser.kycData.usdtWallet = kycUsdtWallet;
-    currentUser.kycData.telephone = kycTelephone;
-    currentUser.kycData.country = kycCountry;
-    currentUser.kycData.rejectionReason = null;
+    if (!kycUsdtWallet) { displayNotification('Please provide a USDT Wallet address.', 'warning'); return; }
+    if (!kycTelephone || !kycCountry) { displayNotification('Telephone and Country are required.', 'error'); return; }
 
     const processKycSubmission = () => {
+        currentUser.kycData.usdtWallet = kycUsdtWallet;
+        currentUser.kycData.telephone = kycTelephone;
+        currentUser.kycData.country = kycCountry;
+        currentUser.kycData.rejectionReason = null;
         currentUser.kycStatus = 'pending';
-        currentUser.kycData.submittedAt = new Date().toISOString(); // Track submission time
+        currentUser.kycData.submittedAt = new Date().toISOString();
+        
         saveState();
         renderKycForm();
-        if(currentUser.isAdmin) renderAdminDashboard();
-        else renderUserDashboard();
+        
         displayNotification('KYC information submitted for review.', 'success');
         addGlobalNotification('admin', 'KYC Submission', `${currentUser.name} submitted KYC for review.`, 'ad-kyc-requests', 'info');
     };
 
-    if (needsDocUpload && kycDocumentFile) {
+    if (kycDocumentFile) { 
         if (kycDocumentFile.size > 2 * 1024 * 1024) {
             displayNotification("Document file too large (max 2MB).", "error");
             return;
         }
-        currentUser.kycData.documentFilename = kycDocumentFile.name;
         const reader = new FileReader();
         reader.onload = function(e) {
             currentUser.kycData.documentUrl = e.target.result;
+            currentUser.kycData.documentFilename = kycDocumentFile.name;
             processKycSubmission();
         };
-        reader.onerror = function(e) { console.error("File reading error for KYC:", e); displayNotification('Error reading document file.', 'error');};
+        reader.onerror = function(e) { 
+            console.error("File reading error for KYC:", e); 
+            displayNotification('Error reading document file.', 'error');
+        };
         reader.readAsDataURL(kycDocumentFile);
-    } else {
+    } else if (currentUser.kycData && currentUser.kycData.documentUrl) {
+        // Allow re-submission of form without a new file if one already exists
         processKycSubmission();
+    } else {
+        displayNotification('Please upload a verification document.', 'error');
     }
 }
 
 // --- System Coin Sale Cycle (User - Plan Based) ---
-function initializeSystemSaleCycle() {
-    if (saleCycleInterval) clearInterval(saleCycleInterval);
-    coinSaleActive = false;
-    saleNotificationShown = false;
-    currentPhaseTimeLeft = systemSaleConfig.cooldownDurationSeconds;
-    updateSystemSaleUserView();
-
-    saleCycleInterval = setInterval(() => {
-        currentPhaseTimeLeft--;
-        if (currentPhaseTimeLeft < 0) {
-            coinSaleActive = !coinSaleActive;
-            currentPhaseTimeLeft = coinSaleActive ? systemSaleConfig.saleDurationSeconds : systemSaleConfig.cooldownDurationSeconds;
-            if (coinSaleActive) {
-                saleNotificationShown = false;
-            }
-        }
-        updateSystemSaleUserView();
-    }, 1000);
-}
-
-function updateSystemSaleUserView() {
+function updateSystemSaleUserView(isSaleActive, timeLeftSeconds) {
     const countdownDisplay = document.getElementById('countdown-timer');
     const plansArea = document.getElementById('system-sale-plans-area');
     const userPendingMessageArea = document.getElementById('system-sale-user-pending-message');
     
     if (!countdownDisplay || !plansArea || !userPendingMessageArea) return;
 
-    const minutes = Math.floor(Math.max(0, currentPhaseTimeLeft) / 60);
-    const seconds = Math.max(0, currentPhaseTimeLeft) % 60;
+    const minutes = Math.floor(timeLeftSeconds / 60);
+    const seconds = timeLeftSeconds % 60;
     const timeString = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 
-    if (coinSaleActive) {
+    if (isSaleActive) {
         countdownDisplay.innerHTML = `<i class="fas fa-fire"></i> SALE ACTIVE! Ends in: ${timeString}`;
         if (!saleNotificationShown && currentUser && currentUser.kycStatus === 'approved') {
             displayNotification("The Marketplace is open for purchases!", "info");
@@ -889,15 +986,22 @@ function renderMarketplaceItems() {
     marketplaceDiv.innerHTML = '';
 
     const activePlans = systemSalePlans.filter(p => p.status === 'active');
-    const isP2PLocked = (currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase);
     const activeP2POffers = sellOffers.filter(o => o.status === 'active' && o.sellerId !== currentUser?.id);
 
+    // Conditionally show message if P2P access is restricted
+    const p2pMarketDisabledMessage = document.getElementById('p2p-market-disabled-message');
+    const initialPurchaseMessage = document.getElementById('system-sale-initial-purchase-message');
+    if (p2pMarketDisabledMessage) {
+        const needsInitialPurchase = currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase;
+        p2pMarketDisabledMessage.classList.toggle('hidden', !needsInitialPurchase);
+        if (initialPurchaseMessage) initialPurchaseMessage.classList.toggle('hidden', !needsInitialPurchase || activePlans.length === 0);
+    }
+    
     if (activePlans.length === 0 && activeP2POffers.length === 0) {
         marketplaceDiv.innerHTML = '<p>No asset programs or P2P offers currently available. Check back later!</p>';
         return;
     }
     
-    // Combine and sort if needed, for now just append
     const allItems = [...activePlans, ...activeP2POffers];
 
     allItems.forEach(item => {
@@ -905,10 +1009,8 @@ function renderMarketplaceItems() {
         itemDiv.className = 'system-sale-plan-item';
         let planName, cost, baseCoins, maturity, returnPercent, totalReturn, currency, onClickAction, itemTypeIcon;
 
-        const buyButtonDisabled = isP2PLocked ? 'disabled' : '';
-
-        // Check if it's a system plan or a P2P offer
-        if (item.hasOwnProperty('coinsAwarded')) { // It's a system plan
+        // This is a "Seller" (system) plan
+        if (item.hasOwnProperty('coinsAwarded')) { 
             const plan = item;
             const returnAmount = plan.coinsAwarded * (plan.returnPercentage / 100);
             
@@ -921,19 +1023,24 @@ function renderMarketplaceItems() {
             totalReturn = plan.coinsAwarded + returnAmount;
             onClickAction = `handleSystemPlanPurchaseRequest('${plan.id}')`;
             itemTypeIcon = 'fa-box-open';
+        
+        // This is a P2P offer from another user
+        } else {
+            // If P2P requires an initial purchase, and the user hasn't made one, don't show the P2P offer.
+            if (currentUser && currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase) {
+                return;
+            }
 
-        } else { // It's a P2P offer (which is now always repackaged)
             const offer = item;
             onClickAction = `buyFromP2POffer('${offer.id}')`;
             itemTypeIcon = 'fa-user-tag';
 
             planName = offer.adminPlanName || `P2P Program from ${offer.sellerName}`;
-            baseCoins = offer.amount; // The full amount being sold
-            cost = offer.amount * offer.adminPrice; // This is the total cost for the buyer
+            baseCoins = offer.amount; 
+            cost = offer.amount * offer.adminPrice;
             currency = offer.adminCurrency;
             maturity = formatDuration(offer.adminMaturityDurationSeconds);
             returnPercent = offer.adminReturnPercentage;
-            // The total return for the *next* buyer is the base they buy + profit on that base
             totalReturn = baseCoins * (1 + returnPercent / 100);
         }
 
@@ -944,16 +1051,19 @@ function renderMarketplaceItems() {
             <p><strong>Maturity:</strong> ${maturity}</p>
             <p><strong>Return:</strong> ${returnPercent}%</p>
             <p style="font-weight:bold;"><strong>Total after maturity:</strong> ${totalReturn.toFixed(2)} COIN</p>
-            <button class="accent" onclick="${onClickAction}" ${buyButtonDisabled && item.hasOwnProperty('adminPrice') ? buyButtonDisabled : ''}><i class="fas fa-shopping-cart"></i> Purchase</button>
+            <button class="accent" onclick="${onClickAction}"><i class="fas fa-shopping-cart"></i> Purchase</button>
         `;
         marketplaceDiv.appendChild(itemDiv);
     });
 }
 
 function handleSystemPlanPurchaseRequest(planId) {
-    if (!coinSaleActive) { 
-        displayNotification('Marketplace is not active. Purchase during active sale period.', 'error'); 
-        return; 
+    const cycleState = JSON.parse(localStorage.getItem('p2p_reform_sale_cycle_state')) || {};
+    const isSaleActive = cycleState.phase === 'sale' && Date.now() < cycleState.phaseEndTime;
+
+    if (!isSaleActive) {
+        displayNotification('Marketplace is not active. Purchase during active sale period.', 'error');
+        return;
     }
     if (currentUser.kycStatus !== 'approved') { 
         displayNotification('Your KYC must be approved to purchase asset programs. Please go to the KYC section.', 'warning'); 
@@ -993,9 +1103,7 @@ function handleSystemPlanPurchaseRequest(planId) {
             maturityDurationSeconds: plan.maturityDurationSeconds,
             totalReturnCoins: totalReturn,
             paymentInfo: { 
-                bankName: plan.planBankName,
-                bankAccount: plan.planBankAccount,
-                btcWallet: plan.planBtcWallet
+                usdtWallet: plan.planUsdtWallet
             }
         },
         status: 'awaiting_payment_to_seller',
@@ -1006,7 +1114,7 @@ function handleSystemPlanPurchaseRequest(planId) {
     systemPurchaseRequests.push(newRequest);
     saveState();
 
-    displayNotification(`Purchase request for '${plan.name}' submitted. Make payment to Seller and upload proof via 'Pending Transactions'.`, 'info');
+    displayNotification(`Purchase request for '${plan.name}' submitted. Make payment and upload proof via 'Pending Transactions'.`, 'info');
     addGlobalNotification('admin', 'Seller Sale Request', `${currentUser.name} requested to buy program '${plan.name}'.`, 'ad-system-sale-requests');
     showUserDashboardSection('ud-pending-transactions', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-pending-transactions"]'));
 }
@@ -1052,13 +1160,14 @@ function cancelMySellOffer(offerId) {
             if (offerIndex > -1) {
                 const offerToCancel = sellOffers[offerIndex];
                 
-                // Return coins to liquid balance
                 currentUser.coinBalance += offerToCancel.amount;
 
-                const asset = userAssets.find(a => a.id === offerToCancel.assetId);
-                if (asset) {
-                    asset.status = 'credited'; // Revert asset status
-                }
+                // Set all assets that were part of the listing back to 'credited'
+                userAssets.forEach(asset => {
+                    if (asset.userId === currentUser.id && asset.status === 'listed_on_market') {
+                        asset.status = 'credited';
+                    }
+                });
                 
                 sellOffers.splice(offerIndex, 1);
                 
@@ -1080,12 +1189,6 @@ function buyFromP2POffer(offerId) {
     if (!currentUser) { displayNotification('Please log in to buy offers.', 'warning'); return; }
     if (currentUser.kycStatus !== 'approved') { displayNotification('Your KYC must be approved to buy P2P offers.', 'warning'); return; }
     
-    const isP2PLocked = (currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase);
-    if (isP2PLocked) {
-        displayNotification('You must make an initial purchase from a seller to participate in the P2P market.', 'warning');
-        return;
-    }
-
     const offer = sellOffers.find(o => o.id === offerId);
     if (!offer || offer.status !== 'active') { displayNotification('Offer unavailable.', 'error'); renderMarketplaceItems(); return; }
 
@@ -1112,7 +1215,7 @@ function buyFromP2POffer(offerId) {
     transactions.push(transaction); 
     offer.status = 'pending_sale';
     saveState();
-    renderUserDashboard();
+    
     displayNotification(`Purchase initiated for offer ID ${offer.id.substring(0,8)}. Please proceed to 'Pending Transactions' to make payment and upload proof.`, 'info');
     addGlobalNotification(offer.sellerId, "P2P Offer Accepted", `${currentUser.name} wants to buy your listed asset. Awaiting their payment.`, 'ud-pending-transactions');
     showUserDashboardSection('ud-pending-transactions', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-pending-transactions"]'));
@@ -1148,16 +1251,21 @@ function renderUserPendingTransactions() {
             const tx = item;
             itemTitle = `<i class="fas fa-exchange-alt"></i> P2P Tx ID: ${tx.id.substring(0,8)}...`;
             const p2pSellerUser = users.find(u => u.id === tx.sellerId);
-            let p2pSellerPaymentDetails = 'Seller details unavailable';
-            if (p2pSellerUser && p2pSellerUser.kycData) {
-                if (tx.currency === 'BTC') {
-                    p2pSellerPaymentDetails = `<strong>BTC Wallet:</strong> ${p2pSellerUser.kycData.usdtWallet || 'Seller BTC Wallet Not Set!'}`;
-                     if (!p2pSellerUser.kycData.usdtWallet && tx.buyerId === currentUser.id) actionsHtml += `<p style="padding:0.3rem; font-size:0.8rem; color:var(--danger-color);">Warning: Seller has not set a BTC wallet! Payment might be difficult.</p>`;
+
+            let p2pSellerPaymentDetails = 'Seller payment details unavailable';
+            if (p2pSellerUser?.kycData) {
+                if (tx.currency === 'BTC' && p2pSellerUser.kycData.btcWallet) {
+                    p2pSellerPaymentDetails = `<strong>BTC Wallet:</strong> ${p2pSellerUser.kycData.btcWallet}`;
+                } else if (p2pSellerUser.kycData.usdtWallet) {
+                     p2pSellerPaymentDetails = `<strong>USDT Wallet (TRC20):</strong> ${p2pSellerUser.kycData.usdtWallet}`;
                 } else {
-                    p2pSellerPaymentDetails = `<strong>Bank:</strong> ${p2pSellerUser.kycData.bankName || 'N/A'} - <strong>Account:</strong> ${p2pSellerUser.kycData.bankAccount || 'N/A'}`;
-                     if ((!p2pSellerUser.kycData.bankName || !p2pSellerUser.kycData.bankAccount) && tx.buyerId === currentUser.id) actionsHtml += `<p style="padding:0.3rem; font-size:0.8rem; color:var(--danger-color);">Warning: Seller has not set bank details! Payment might be difficult.</p>`;
+                     p2pSellerPaymentDetails = 'Seller has not set a valid wallet address for this currency!';
+                     if (tx.buyerId === currentUser.id) {
+                        actionsHtml += `<p style="padding:0.3rem; font-size:0.8rem; color:var(--danger-color);">Warning: Seller has not set a wallet address! Contact support.</p>`;
+                     }
                 }
             }
+            
             const displayTotalP2P = formatCurrency(tx.totalPrice, tx.currency);
 
             itemDetailsHtml = `
@@ -1167,7 +1275,7 @@ function renderUserPendingTransactions() {
                 <p>Status: <strong style="text-transform: capitalize;">${tx.status.replace(/_/g, ' ')}</strong></p>
             `;
 
-            if (tx.buyerId === currentUser.id) { // Current user is BUYER
+            if (tx.buyerId === currentUser.id) { 
                 if (tx.status === 'awaiting_payment') {
                     actionsHtml += `
                         <p><strong>Action:</strong> Pay ${displayTotalP2P} to ${tx.sellerName}.</p>
@@ -1185,7 +1293,7 @@ function renderUserPendingTransactions() {
                 } else if (tx.status === 'disputed') {
                     actionsHtml += `<p style="color:var(--danger-color);"><strong>Status: Disputed.</strong> Awaiting admin review.</p>`;
                 }
-            } else if (tx.sellerId === currentUser.id) { // Current user is SELLER
+            } else if (tx.sellerId === currentUser.id) { 
                 if (tx.status === 'payment_proof_submitted') {
                     actionsHtml += `
                         <p><strong>Action:</strong> ${tx.buyerName} submitted payment proof for ${displayTotalP2P}.</p>
@@ -1216,20 +1324,20 @@ function renderUserPendingTransactions() {
             const planNameDisplay = req.planDetails ? `Program: <strong>${req.planDetails.name}</strong>` : ``;
             const coinsDisplay = req.planDetails ? `Total Return: ${req.planDetails.totalReturnCoins.toFixed(2)} COIN` : '';
 
-            let sellerPaymentDetailsSys = "<strong>Seller payment details for this program:</strong><br>";
-            if(req.planDetails && req.planDetails.paymentInfo) {
-                if (req.planDetails.paymentInfo.bankName && req.planDetails.paymentInfo.bankAccount) {
-                    sellerPaymentDetailsSys += `Bank: ${req.planDetails.paymentInfo.bankName}, Acc: ${req.planDetails.paymentInfo.bankAccount}<br>`;
-                }
-                if (req.planDetails.paymentInfo.btcWallet) {
-                    sellerPaymentDetailsSys += `BTC Wallet: ${req.planDetails.paymentInfo.btcWallet}`;
-                }
-                 if (!req.planDetails.paymentInfo.bankName && !req.planDetails.paymentInfo.btcWallet && !(req.planDetails.paymentInfo.bankName && req.planDetails.paymentInfo.bankAccount)) {
-                   sellerPaymentDetailsSys += "Not configured by Seller.";
+            let sellerPaymentDetailsHtml = `<div class="seller-payment-details-box">
+                <strong>Seller payment details for this program:</strong>`;
+            if (req.planDetails?.paymentInfo) {
+                const info = req.planDetails.paymentInfo;
+                if (info.usdtWallet) {
+                    sellerPaymentDetailsHtml += `<p>USDT Wallet (TRC20): ${info.usdtWallet}</p>`;
+                } else {
+                   sellerPaymentDetailsHtml += "<p>Not configured by Seller.</p>";
                 }
             } else {
-                sellerPaymentDetailsSys += "Configuration Error."
+                sellerPaymentDetailsHtml += "<p>Configuration Error.</p>";
             }
+            sellerPaymentDetailsHtml += `</div>`;
+
 
              itemDetailsHtml = `
                 <p>${planNameDisplay}</p>
@@ -1241,7 +1349,7 @@ function renderUserPendingTransactions() {
             if (req.status === 'awaiting_payment_to_seller') {
                 actionsHtml = `
                     <p><strong>Action:</strong> Pay ${displayTotalSys} to Seller.</p>
-                    <div class="payment-details-highlight"><small>${sellerPaymentDetailsSys}</small></div>
+                    ${sellerPaymentDetailsHtml}
                     <label for="proof-file-system-${req.id}">Upload Payment Proof (Seller Plan):</label>
                     <input type="file" id="proof-file-system-${req.id}" accept="image/*,.pdf">
                     <button onclick="submitSystemPaymentProof('${req.id}')" class="accent">I Paid Seller & Submit Proof</button>
@@ -1273,76 +1381,126 @@ function submitPaymentProof(transactionId) {
 
     if (fileInput.files.length > 0) {
         const file = fileInput.files[0];
+        const processProof = () => {
+            tx.status = 'payment_proof_submitted';
+            saveState(); 
+            renderUserPendingTransactions();
+            displayNotification(`Payment proof (${tx.paymentProofFilename}) submitted for Tx ID ${tx.id.substring(0,8)}. Waiting for seller confirmation.`, 'success');
+            addGlobalNotification(tx.sellerId, "P2P Payment Proof Submitted", `${tx.buyerName} submitted payment proof for your offer. Please verify and finalize the transaction.`, 'ud-pending-transactions');
+        };
+
         if (file.size > 2 * 1024 * 1024) {
             displayNotification("File too large for preview (max 2MB). Filename stored.", "warning");
-            tx.paymentProofFilename = file.name; tx.paymentProofDataUrl = null;
+            tx.paymentProofFilename = file.name; 
+            tx.paymentProofDataUrl = null;
+            processProof();
         } else {
             tx.paymentProofFilename = file.name;
             const reader = new FileReader();
-            reader.onload = function(e) { tx.paymentProofDataUrl = e.target.result; saveState(); renderUserPendingTransactions(); };
-            reader.onerror = function(e) { console.error("File reading error:", e); tx.paymentProofDataUrl = null; saveState(); renderUserPendingTransactions();};
+            reader.onload = function(e) { 
+                tx.paymentProofDataUrl = e.target.result; 
+                processProof();
+            };
+            reader.onerror = function(e) { 
+                console.error("File reading error:", e); 
+                tx.paymentProofDataUrl = null;
+                processProof();
+            };
             reader.readAsDataURL(file);
         }
-        tx.status = 'payment_proof_submitted';
-        saveState(); renderUserPendingTransactions();
-        displayNotification(`Payment proof (${tx.paymentProofFilename}) submitted for Tx ID ${tx.id.substring(0,8)}. Waiting for seller confirmation.`, 'success');
-        addGlobalNotification(tx.sellerId, "P2P Payment Proof Submitted", `${tx.buyerName} submitted payment proof for your offer. Please verify and finalize the transaction.`, 'ud-pending-transactions');
     } else { displayNotification('Please select a file to upload as proof of payment.', 'error'); return; }
 }
 
+/**
+ * Finalizes a P2P transaction. This is a critical state-mutating function.
+ * 1. Creates a new maturing asset for the buyer.
+ * 2. Updates the seller's assets that were part of the P2P listing to 'sold'.
+ * 3. Updates the transaction and original P2P offer to their final statuses.
+ * 4. Notifies the buyer of their new asset.
+ * 5. Saves the state and re-renders the UI.
+ * @param {string} transactionId - The ID of the transaction to finalize.
+ */
 function confirmPaymentAndReleaseCoins(transactionId) {
-    const tx = transactions.find(t => t.id === transactionId);
-    if (!tx || tx.sellerId !== currentUser.id) { displayNotification('Transaction not found or you are not the seller.', 'error'); return;}
+    showCustomConfirm(
+        "Are you sure you have received the payment? This action is irreversible and will transfer the asset program to the buyer.",
+        () => {
+            // Step 1: Find all related data objects
+            const tx = transactions.find(t => t.id === transactionId && t.sellerId === currentUser.id);
+            if (!tx) {
+                displayNotification('Transaction not found or you are not the seller.', 'error');
+                return;
+            }
 
-    const buyer = users.find(u => u.id === tx.buyerId);
-    if (!buyer) { displayNotification('Buyer not found. Cannot complete transaction.', 'error'); return; }
-    
-    const seller = currentUser;
-    const offer = sellOffers.find(o => o.id === tx.offerId);
-    if (!offer) { displayNotification('Original P2P offer not found. Transaction cannot be completed.', 'error'); return; }
+            const buyer = users.find(u => u.id === tx.buyerId);
+            if (!buyer) {
+                displayNotification('Critical Error: Buyer could not be found. Cannot complete transaction.', 'error');
+                return;
+            }
 
-    // Seller's payment is external. We now process what the buyer receives.
-    // Buyer gets base coins instantly and a new maturing asset for the profit
-    buyer.coinBalance += offer.amount; // Base coins are liquid immediately
+            const offer = sellOffers.find(o => o.id === tx.offerId);
+            if (!offer) {
+                displayNotification('Critical Error: The original P2P offer could not be found. Cannot complete transaction.', 'error');
+                return;
+            }
+            
+            // Step 2: Create the new maturing asset for the buyer based on the offer's terms
+            const returnPercentage = offer.adminReturnPercentage || 0;
+            const maturityDurationSeconds = offer.adminMaturityDurationSeconds || (7 * 86400); // Default 7 days
+            const totalReturnForBuyer = offer.amount * (1 + returnPercentage / 100);
 
-    const profitCoins = offer.amount * (offer.adminReturnPercentage / 100);
-    const newAssetForBuyer = {
-        id: generateId(),
-        userId: buyer.id,
-        userName: buyer.name,
-        planId: offer.id, // Use offer ID as a reference
-        planName: `${offer.adminPlanName || `P2P Program from ${seller.name}`} (Profit Portion)`,
-        purchaseDate: new Date().toISOString(),
-        maturityDate: new Date(Date.now() + offer.adminMaturityDurationSeconds * 1000).toISOString(),
-        baseCoins: offer.amount, // The base they bought
-        returnPercentage: offer.adminReturnPercentage,
-        totalReturnCoins: profitCoins, // The asset itself only tracks the profit
-        status: 'repackaged_profit_maturing', // Differentiated status for P2P profit
-        origin: { 
-            type: 'p2p_repackaged',
-            cost: offer.amount * offer.adminPrice,
-            currency: offer.adminCurrency,
-            baseCoins: offer.amount,
-            returnPercentage: offer.adminReturnPercentage,
-            maturityDurationSeconds: offer.adminMaturityDurationSeconds
-        }
-    };
-    userAssets.push(newAssetForBuyer);
-    addGlobalNotification(buyer.id, "P2P Program Approved", `Your purchase from ${seller.name} is complete. Base coins are now liquid, and your profit portion is maturing.`, 'ud-my-assets', 'success');
-    
-    tx.status = 'completed';
-    offer.status = 'sold';
+            const newAssetForBuyer = {
+                id: generateId(),
+                userId: buyer.id,
+                userName: buyer.name,
+                planId: offer.id, // Use offer ID as the plan reference
+                planName: offer.adminPlanName || `P2P Program from ${tx.sellerName}`,
+                purchaseDate: new Date().toISOString(),
+                maturityDate: new Date(Date.now() + maturityDurationSeconds * 1000).toISOString(),
+                baseCoins: offer.amount,
+                returnPercentage: returnPercentage,
+                totalReturnCoins: totalReturnForBuyer,
+                status: 'maturing',
+                origin: { 
+                    type: 'p2p_repackaged',
+                    cost: offer.amount * (offer.adminPrice || 0),
+                    currency: offer.adminCurrency || 'USD',
+                    baseCoins: offer.amount,
+                    returnPercentage: returnPercentage,
+                    maturityDurationSeconds: maturityDurationSeconds
+                }
+            };
+            userAssets.push(newAssetForBuyer);
 
-    // Mark the original seller's asset as sold
-    const originalAsset = userAssets.find(a => a.id === offer.assetId);
-    if (originalAsset) {
-        originalAsset.status = 'sold';
-    }
+            // Step 3: Update the seller's assets that were part of this sale
+            // This marks all assets that were "backing" the P2P offer as now being sold
+            userAssets.forEach(asset => {
+                if (asset.userId === tx.sellerId && asset.status === 'listed_on_market') {
+                    asset.status = 'sold';
+                }
+            });
 
-    saveState();
-    renderUserDashboard();
-    displayNotification(`Payment confirmed. Transaction with ${buyer.name} is complete.`, 'success');
+            // Step 4: Update transaction and offer statuses to their final state
+            tx.status = 'completed';
+            offer.status = 'sold';
+
+            // Step 5: Notify the buyer
+            addGlobalNotification(
+                buyer.id, 
+                "P2P Purchase Complete", 
+                `Your purchase from ${tx.sellerName} is complete. The program is now maturing in "My Assets".`, 
+                'ud-my-assets', 
+                'success'
+            );
+
+            // Step 6: Save state and re-render the seller's dashboard
+            saveState();
+            renderUserDashboard();
+            displayNotification(`Payment confirmed. Transaction with ${buyer.name} is complete.`, 'success');
+        }, 
+        "Confirm Payment", "Yes, I Received It", "accent"
+    );
 }
+
 
 function cancelP2PPurchaseAsBuyer(transactionId) {
     const tx = transactions.find(t => t.id === transactionId && t.buyerId === currentUser.id);
@@ -1358,10 +1516,10 @@ function cancelP2PPurchaseAsBuyer(transactionId) {
     showCustomConfirm(
         "Are you sure you want to cancel this P2P purchase? The seller's offer will become active again.",
         () => {
-            tx.status = 'cancelled'; // Mark transaction as cancelled
+            tx.status = 'cancelled';
             const originalOffer = sellOffers.find(o => o.id === tx.offerId);
             if (originalOffer && originalOffer.status === 'pending_sale') {
-                originalOffer.status = 'active'; // Make the original offer active again
+                originalOffer.status = 'active';
             }
             saveState();
             renderUserDashboard();
@@ -1451,7 +1609,7 @@ function renderP2PTransactionHistory() {
 }
 
 function exportP2PTransactionHistoryPDF() {
-    if (!currentUser) return;
+    if (!currentUser || !window.jspdf) return;
     const { jsPDF } = window.jspdf; const doc = new jsPDF();
     const userTransactions = transactions.filter(tx => (tx.buyerId === currentUser.id || tx.sellerId === currentUser.id) && (tx.status === 'completed' || tx.status === 'cancelled' || tx.status === 'resolved_by_admin' || tx.status === 'cancelled_by_admin')).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
     if (userTransactions.length === 0) { displayNotification('No history to export.', 'info'); return; }
@@ -1500,20 +1658,33 @@ function submitSystemPaymentProof(requestId) {
 
     if (fileInput.files.length > 0) {
         const file = fileInput.files[0];
+        const processProof = () => {
+            req.status = 'payment_proof_submitted_to_seller';
+            saveState(); 
+            renderUserPendingTransactions();
+            displayNotification(`Proof (${req.paymentProofFilename}) submitted to Seller for program purchase.`, 'success');
+            addGlobalNotification('admin', 'Seller Sale Proof', `${req.userName} submitted proof for program '${req.planDetails.name}'.`, 'ad-system-sale-requests');
+        };
+
          if (file.size > 2 * 1024 * 1024) {
             displayNotification("File too large for preview (max 2MB). Filename stored.", "warning");
-            req.paymentProofFilename = file.name; req.paymentProofDataUrl = null;
+            req.paymentProofFilename = file.name; 
+            req.paymentProofDataUrl = null;
+            processProof();
         } else {
             req.paymentProofFilename = file.name;
             const reader = new FileReader();
-            reader.onload = function(e) { req.paymentProofDataUrl = e.target.result; saveState(); renderUserPendingTransactions(); };
-            reader.onerror = function(e) { console.error("File reading error:", e); req.paymentProofDataUrl = null; saveState(); renderUserPendingTransactions();};
+            reader.onload = function(e) { 
+                req.paymentProofDataUrl = e.target.result; 
+                processProof();
+            };
+            reader.onerror = function(e) { 
+                console.error("File reading error:", e); 
+                req.paymentProofDataUrl = null; 
+                processProof();
+            };
             reader.readAsDataURL(file);
         }
-        req.status = 'payment_proof_submitted_to_seller';
-        saveState(); renderUserPendingTransactions();
-        displayNotification(`Proof (${req.paymentProofFilename}) submitted to Seller for program purchase.`, 'success');
-        addGlobalNotification('admin', 'Seller Sale Proof', `${req.userName} submitted proof for program '${req.planDetails.name}'.`, 'ad-system-sale-requests');
     } else { displayNotification('Select a file for proof.', 'error'); return; }
 }
 
@@ -1522,24 +1693,48 @@ function renderUserAssets() {
     const assetsListDiv = document.getElementById('user-assets-list');
     if (!assetsListDiv || !currentUser) return;
 
-    const myAssets = userAssets.filter(asset => asset.userId === currentUser.id)
-        .sort((a,b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
+    const myAssets = userAssets.filter(asset => asset.userId === currentUser.id);
 
-    if (myAssets.length === 0) {
+    // Separate assets based on their status for clearer rendering.
+    const listedOnMarketAssets = myAssets.filter(asset => asset.status === 'listed_on_market');
+    const otherAssets = myAssets.filter(asset => asset.status !== 'listed_on_market')
+        .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
+
+    assetsListDiv.innerHTML = '';
+
+    if (otherAssets.length === 0 && listedOnMarketAssets.length === 0) {
         assetsListDiv.innerHTML = '<p>You have not purchased any asset programs yet. Visit the "Marketplace" page to start.</p>';
         return;
     }
-    
-    assetsListDiv.innerHTML = ''; // Clear previous render
 
-    myAssets.forEach(asset => {
+    // Render a single, clear summary card for all assets currently on the P2P market.
+    if (listedOnMarketAssets.length > 0) {
+        const activeSellOffer = sellOffers.find(o => o.sellerId === currentUser.id && o.status === 'active');
+        if (activeSellOffer) {
+            const summaryAssetDiv = document.createElement('div');
+            summaryAssetDiv.className = 'asset-item';
+            summaryAssetDiv.style.backgroundColor = '#e7f7ff';
+            summaryAssetDiv.style.borderLeftColor = 'var(--accent-color)';
+            summaryAssetDiv.innerHTML = `
+                <h5><i class="fas fa-bullhorn"></i> P2P Market Listing</h5>
+                <p><strong>Total Coins Listed:</strong> ${activeSellOffer.amount.toFixed(2)} COIN</p>
+                <p><strong>Est. Total Value:</strong> ${formatCurrency(activeSellOffer.amount * activeSellOffer.adminPrice, activeSellOffer.adminCurrency)}</p>
+                <p><strong>Status:</strong> <span style="color: var(--accent-color); font-weight: 600;">Active on P2P Market</span></p>
+                <p><small>This represents your coins for sale. Manage this from the "My P2P Offers" page.</small></p>
+            `;
+            assetsListDiv.appendChild(summaryAssetDiv);
+        }
+    }
+
+    // Render individual cards for all other assets (maturing, credited, sold, etc.).
+    otherAssets.forEach(asset => {
         const assetDiv = document.createElement('div');
         assetDiv.className = 'asset-item';
         assetDiv.id = `asset-${asset.id}`;
 
         let statusHtml = '';
         const isRepackagedProfit = asset.status === 'repackaged_profit_maturing';
-        
+
         if (asset.status === 'maturing' || isRepackagedProfit) {
             statusHtml = `
                 <p><strong>Status:</strong> ${isRepackagedProfit ? 'Maturing (P2P Profit)' : 'Maturing'}</p>
@@ -1547,19 +1742,19 @@ function renderUserAssets() {
         } else if (asset.status === 'credited') {
             assetDiv.classList.add('matured');
             statusHtml = `
-                <p style="color: var(--success-color);"><strong>Status: Matured & Credited</strong></p>
+                <p style="color: var(--success-color); font-weight: 600;">Status: Matured & Credited</p>
                 <button onclick="listAssetOnP2P('${asset.id}')" class="accent"><i class="fas fa-bullhorn"></i> List on P2P Market</button>
             `;
-        } else if (asset.status === 'listed_on_market') {
-            statusHtml = `<p><strong>Status:</strong> <span style="color: var(--accent-color);">Active on P2P Market</span></p>`;
         } else if (asset.status === 'sold') {
-            statusHtml = `<p><strong>Status:</strong> <span style="color: var(--success-color);">Sold on P2P Market</span></p>`;
+            statusHtml = `<p><strong>Status:</strong> <span style="color: var(--success-color); font-weight: 600;">Sold on P2P Market</span></p>`;
+        } else {
+             statusHtml = `<p><strong>Status:</strong><span style="text-transform: capitalize;"> ${asset.status.replace(/_/g, ' ')}</span></p>`;
         }
 
-        const baseCoinInfo = isRepackagedProfit ? 
+        const baseCoinInfo = isRepackagedProfit ?
             `<p><small><strong>Original Base:</strong> ${asset.baseCoins.toFixed(2)} COIN (instantly liquid)</small></p>` :
             `<p><strong>Base Coins:</strong> ${asset.baseCoins.toFixed(2)} COIN</p>`;
-        
+
         const profitInfo = isRepackagedProfit ?
             `<p><strong>Maturing Profit:</strong> ${asset.totalReturnCoins.toFixed(2)} COIN</p>` :
             `<p><strong>Total Return:</strong> ${asset.totalReturnCoins.toFixed(2)} COIN</p>`;
@@ -1573,34 +1768,26 @@ function renderUserAssets() {
         `;
         assetsListDiv.appendChild(assetDiv);
     });
-    
+
     startAssetCountdowns();
 }
 
-/**
- * [FIXED] This function was missing. It creates and manages the countdown timers for maturing assets.
- * When an asset matures, it updates the user's balance and the asset's status.
- */
+
 function startAssetCountdowns() {
     if (userAssetCountdownInterval) clearInterval(userAssetCountdownInterval);
     if (!currentUser || currentUser.isAdmin) return;
-
-    const maturingAssets = userAssets.filter(asset => 
-        asset.userId === currentUser.id && 
-        (asset.status === 'maturing' || asset.status === 'repackaged_profit_maturing')
-    );
-
-    if (maturingAssets.length === 0) return;
-
+    
+    // This function runs every second to update countdowns for assets currently displayed on the page.
     userAssetCountdownInterval = setInterval(() => {
         let needsDashboardUpdate = false;
         
-        // Use a static list for the loop iteration to avoid issues if the main array is modified
+        // Find all assets that are currently maturing for the logged-in user.
         const assetsToCheck = userAssets.filter(asset => 
             asset.userId === currentUser.id && 
             (asset.status === 'maturing' || asset.status === 'repackaged_profit_maturing')
         );
 
+        // If no assets are maturing, we can stop the interval.
         if (assetsToCheck.length === 0) {
              clearInterval(userAssetCountdownInterval);
              userAssetCountdownInterval = null;
@@ -1609,87 +1796,82 @@ function startAssetCountdowns() {
 
         assetsToCheck.forEach(asset => {
             const countdownEl = document.getElementById(`countdown-${asset.id}`);
-            if (!countdownEl) return;
+            if (!countdownEl) return; // Skip if the element isn't on the page
 
             const maturityDate = new Date(asset.maturityDate);
             const now = new Date();
             const timeLeftSeconds = Math.max(0, (maturityDate.getTime() - now.getTime()) / 1000);
 
             if (timeLeftSeconds > 0) {
+                // Update the visual countdown timer.
                 const days = Math.floor(timeLeftSeconds / 86400);
                 const hours = Math.floor((timeLeftSeconds % 86400) / 3600);
                 const minutes = Math.floor((timeLeftSeconds % 3600) / 60);
                 const seconds = Math.floor(timeLeftSeconds % 60);
                 countdownEl.textContent = `Matures in: ${days}d ${hours}h ${minutes}m ${seconds}s`;
             } else {
-                // Asset has matured, check status to prevent multiple credits
-                if (asset.status === 'maturing' || asset.status === 'repackaged_profit_maturing') {
-                    currentUser.coinBalance += asset.totalReturnCoins;
-                    asset.status = 'credited';
-                    
-                    const notificationTitle = "Asset Matured!";
-                    const notificationMessage = `Your asset "${asset.planName}" has matured. ${asset.totalReturnCoins.toFixed(2)} COINs have been added to your liquid balance. You can now list it on the P2P market.`;
-                    
-                    addGlobalNotification(currentUser.id, notificationTitle, notificationMessage, 'ud-my-assets', 'success');
-                    displayNotification(notificationMessage, 'success');
-                    
+                // The countdown has finished. Time to mature the asset.
+                // We run the robust checkAndProcessMaturedAssets function which handles the actual data change.
+                if(checkAndProcessMaturedAssets(currentUser)){
+                    // If the function returns true, it means an asset was changed.
+                    // We flag that the dashboard needs a full visual update.
                     needsDashboardUpdate = true;
                 }
             }
         });
 
         if (needsDashboardUpdate) {
+            // If any asset matured, save the new state and re-render the relevant dashboard components.
             saveState();
-            // Re-render the relevant parts of the dashboard to reflect changes
-            renderUserAssets(); // This will update the list and restart the countdowns for any remaining assets
-            renderUserCoinChart();
-            document.getElementById('coin-balance').textContent = currentUser.coinBalance.toFixed(2);
+            renderUserAssets(); // Re-render the asset list to show the new 'credited' status.
+            renderUserCoinChart(); // Update the pie chart.
+            document.getElementById('coin-balance').textContent = currentUser.coinBalance.toFixed(2); // Update the main balance display.
         }
     }, 1000);
 }
 
 
 function listAssetOnP2P(assetId) {
-    // 1. Find the TRIGGERING asset. We still need its origin for pricing.
+    if (currentUser.p2pMarketRequiresInitialPurchase && !currentUser.hasMadeInitialSystemPurchase) {
+        displayNotification('You must purchase a program from the seller first to access the P2P market.', 'warning');
+        showUserDashboardSection('ud-system-sale', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-system-sale"]'));
+        return;
+    }
+
     const triggeringAsset = userAssets.find(a => a.id === assetId && a.userId === currentUser.id && a.status === 'credited');
     if (!triggeringAsset) {
         displayNotification("Could not find a valid credited asset to trigger the sale.", "error");
         return;
     }
 
-    // 2. The amount to list is the USER'S ENTIRE LIQUID BALANCE.
     const amountToList = currentUser.coinBalance;
 
-    // 3. Check if there's anything to list.
     if (amountToList <= 0) {
         displayNotification(`You have no liquid COINs to list. Your balance is 0.`, "error");
         return;
     }
-
-    // 4. Get the pricing info from the TRIGGERING asset's origin.
-    let originData;
+    
+    // Find a valid pricing origin, starting with the triggering asset.
+    let originData = null;
     if (triggeringAsset.origin && (triggeringAsset.origin.type === 'system' || triggeringAsset.origin.type === 'p2p_repackaged')) {
         originData = triggeringAsset.origin;
+    } else {
+        // Fallback: find the most recent asset with valid origin data.
+        const userAssetsSorted = userAssets
+                .filter(a => a.userId === currentUser.id && a.origin)
+                .sort((a,b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
+        if (userAssetsSorted.length > 0) {
+            originData = userAssetsSorted[0].origin;
+        }
     }
 
     if (!originData || originData.cost === undefined || originData.baseCoins === undefined || originData.baseCoins <= 0) {
-        displayNotification("Error: The triggering asset's origin is unclear, cannot determine price. Please contact support.", "error");
-        console.error("Triggering asset missing or invalid origin data:", triggeringAsset);
+        displayNotification("Error: The pricing origin for your assets is unclear. Cannot create P2P offer. Please contact support.", "error");
         return;
     }
-    
-    // 5. Calculate pricing for the new offer based on the ENTIRE liquid balance.
-    const costPerBaseCoin = originData.cost / originData.baseCoins;
-    const newOfferTotalValue = amountToList * costPerBaseCoin;
-    const newOfferPricePerCoin = (amountToList > 0) ? newOfferTotalValue / amountToList : 0; // This will be the same as costPerBaseCoin
-    const newOfferCurrency = originData.currency || systemSaleConfig.defaultSystemCurrency;
-    const newOfferReturnPercentage = originData.returnPercentage;
-    const newOfferMaturityDuration = originData.maturityDurationSeconds;
 
-    // 6. Update the confirmation message to be clear and match the new logic.
-    const confirmationMessage = `This will list your <strong>entire liquid balance (${amountToList.toFixed(2)} COINs)</strong> on the P2P market. Your liquid balance will be set to 0 and these coins will be held for the sale.<br><br>Do you want to proceed?`;
+    const confirmationMessage = `This will list your <strong>entire liquid balance (${amountToList.toFixed(2)} COINs)</strong> on the P2P market. Your liquid balance will be set to 0 and these coins will be held for the sale.<br><br>The selling price will be automatically calculated based on your asset history. Do you want to proceed?`;
 
-    // 7. Show the confirmation modal.
     showCustomConfirm(
         confirmationMessage,
         () => {
@@ -1702,7 +1884,7 @@ function listAssetOnP2P(assetId) {
             } else {
                 displayNotification(result.message, "error");
             }
-        }, "Confirm P2P Sale", "Yes, List Asset", "accent"
+        }, "Confirm P2P Sale", "Yes, List My Coins", "accent"
     );
 }
 
@@ -1713,24 +1895,24 @@ function createP2PListingFromLiquidBalance(userToList, originData) {
     }
 
     if (!originData || originData.cost === undefined || originData.baseCoins === undefined || originData.baseCoins <= 0) {
-        console.error("P2P Listing Error: Invalid origin data provided.", originData);
         return { success: false, message: "Cannot create P2P offer due to missing or invalid pricing origin data." };
     }
     
+    // Calculate the price per coin based on the origin asset data
     const costPerBaseCoin = originData.cost / originData.baseCoins;
-    const newOfferTotalValue = amountToList * costPerBaseCoin;
-    const newOfferPricePerCoin = (amountToList > 0) ? newOfferTotalValue / amountToList : 0;
+    const newOfferPricePerCoin = costPerBaseCoin; // Price per coin is based on what the user originally paid
+    
+    // Get other terms from the origin
     const newOfferCurrency = originData.currency || systemSaleConfig.defaultSystemCurrency;
     const newOfferReturnPercentage = originData.returnPercentage;
     const newOfferMaturityDuration = originData.maturityDurationSeconds;
 
     const newOffer = {
         id: generateId(),
-        assetId: originData.id || `admin_credit_${generateId()}`,
         sellerId: userToList.id,
         sellerName: userToList.name,
         amount: amountToList,
-        adminModified: true, 
+        adminModified: true, // This flag indicates the terms are set by the system
         adminPlanName: `P2P Program from ${userToList.name}`,
         adminPrice: newOfferPricePerCoin,
         adminCurrency: newOfferCurrency,
@@ -1742,6 +1924,7 @@ function createP2PListingFromLiquidBalance(userToList, originData) {
     sellOffers.push(newOffer);
     userToList.coinBalance = 0; 
     
+    // Mark all credited assets as being part of the new P2P listing
     userAssets.forEach(asset => {
         if (asset.userId === userToList.id && asset.status === 'credited') {
             asset.status = 'listed_on_market';
@@ -1762,18 +1945,14 @@ function populateWithdrawalDestination() {
     let destinationText = "KYC details not found or not approved.";
 
     if (currentUser.kycStatus === 'approved' && currentUser.kycData) {
-        if (selectedCurrency === 'USD' || selectedCurrency === 'ZAR') {
-            if (currentUser.kycData.bankName && currentUser.kycData.bankAccount) {
-                destinationText = `Bank: ${currentUser.kycData.bankName}, Account: ${currentUser.kycData.bankAccount}`;
-            } else {
-                destinationText = `Your ${selectedCurrency} bank details are not set in KYC.`;
-            }
-        } else if (selectedCurrency === 'BTC') {
-            if (currentUser.kycData.usdtWallet) { 
-                destinationText = `BTC (via USDT Wallet): ${currentUser.kycData.usdtWallet}`;
-            } else {
-                destinationText = `Your BTC/USDT wallet is not set in KYC.`;
-            }
+        if (selectedCurrency === 'BTC') {
+            destinationText = currentUser.kycData.btcWallet 
+                ? `BTC Wallet: ${currentUser.kycData.btcWallet}`
+                : `Your BTC wallet is not set in KYC.`;
+        } else { 
+            destinationText = currentUser.kycData.usdtWallet
+                ? `USDT Wallet (TRC20): ${currentUser.kycData.usdtWallet}`
+                : `Your USDT wallet is not set in KYC.`;
         }
     }
     destinationInfoEl.textContent = destinationText;
@@ -1786,8 +1965,8 @@ function handleWithdrawalRequest() {
         return;
     }
 
-    const currency = document.getElementById('withdraw-currency').value;
-    const amount = parseFloat(document.getElementById('withdraw-amount').value);
+    const currency = getInputValue('withdraw-currency');
+    const amount = parseFloat(getInputValue('withdraw-amount'));
 
     if (isNaN(amount) || amount <= 0) {
         displayNotification('Please enter a valid positive amount to withdraw.', 'error');
@@ -1800,15 +1979,23 @@ function handleWithdrawalRequest() {
     }
 
     let destinationValid = false;
-    if (currency === 'USD' || currency === 'ZAR') {
-        destinationValid = currentUser.kycData.bankName && currentUser.kycData.bankAccount;
-    } else if (currency === 'BTC') {
-        destinationValid = currentUser.kycData.usdtWallet;
+    let destinationString = '';
+    if (currency === 'BTC') {
+        if (currentUser.kycData.btcWallet) {
+            destinationValid = true;
+            destinationString = `BTC Wallet: ${currentUser.kycData.btcWallet}`;
+        }
+    } else { 
+        if (currentUser.kycData.usdtWallet) {
+            destinationValid = true;
+            destinationString = `USDT Wallet (TRC20): ${currentUser.kycData.usdtWallet}`;
+        }
     }
 
     if (!destinationValid) {
-        displayNotification(`Your destination ${currency === 'BTC' ? 'BTC/USDT wallet' : 'bank details'} are not set in your KYC. Please update them.`, 'error');
-        showUserDashboardSection('ud-kyc', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-kyc"]'));
+        const walletType = currency === 'BTC' ? 'BTC' : 'USDT';
+        displayNotification(`Your destination ${walletType} wallet is not set in your KYC. Please contact support to add it.`, 'error');
+        showUserDashboardSection('ud-support-tickets', document.querySelector('#user-dashboard-view .dashboard-sidebar button[onclick*="ud-support-tickets"]'));
         return;
     }
 
@@ -1819,21 +2006,22 @@ function handleWithdrawalRequest() {
         userEmail: currentUser.email,
         amount: amount,
         currency: currency,
-        destination: currency === 'BTC' ? `BTC Wallet: ${currentUser.kycData.usdtWallet}` : `Bank: ${currentUser.kycData.bankName} - Acc: ${currentUser.kycData.bankAccount}`,
+        destination: destinationString,
         status: 'pending_admin_approval',
         requestedAt: new Date().toISOString(),
         processedAt: null,
         adminNotes: null
     };
 
-    currentUser.walletBalance[currency] -= amount; // Deduct from balance immediately (held)
+    currentUser.walletBalance[currency] -= amount;
     withdrawalRequests.unshift(newRequest);
     saveState();
 
     displayNotification(`Withdrawal request for ${formatCurrency(amount, currency)} submitted. Admin will review within 48 hours.`, 'success');
     addGlobalNotification('admin', 'New Withdrawal Request', `${currentUser.name} requested to withdraw ${formatCurrency(amount, currency)}.`, 'ad-withdrawal-requests', 'info');
-
-    document.getElementById('withdraw-amount').value = '';
+    
+    const withdrawAmountInput = document.getElementById('withdraw-amount');
+    if (withdrawAmountInput) withdrawAmountInput.value = '';
     renderUserWithdrawalHistory();
     renderWalletBalances(); 
 }
@@ -1875,11 +2063,11 @@ function renderUserWithdrawalHistory() {
 }
 
 
-// --- Support Tickets (User & Admin) ---
+// --- Support Tickets (Live Chat) ---
 function createNewSupportTicket() {
     if (!currentUser) { displayNotification('Please log in to create a support ticket.', 'error'); return; }
-    const subject = document.getElementById('ticket-subject').value.trim();
-    const message = document.getElementById('ticket-message').value.trim();
+    const subject = getInputValue('ticket-subject').trim();
+    const message = getInputValue('ticket-message').trim();
 
     if (!subject || !message) {
         displayNotification("Subject and message are required for a support ticket.", "error");
@@ -1909,8 +2097,10 @@ function createNewSupportTicket() {
     displayNotification("Support ticket created successfully. We will get back to you soon.", "success");
     addGlobalNotification('admin', "New Support Ticket", `User ${currentUser.name} created a ticket: "${subject}"`, 'ad-support-tickets', 'info');
 
-    document.getElementById('ticket-subject').value = '';
-    document.getElementById('ticket-message').value = '';
+    const subjectInput = document.getElementById('ticket-subject');
+    const messageInput = document.getElementById('ticket-message');
+    if (subjectInput) subjectInput.value = '';
+    if (messageInput) messageInput.value = '';
     renderUserSupportTickets();
 }
 
@@ -1942,8 +2132,8 @@ function renderUserSupportTickets() {
             <td class="${statusClass}" style="text-transform: capitalize;">${ticket.status.replace(/_/g, ' ')}</td>
             <td>${new Date(ticket.updatedAt).toLocaleString()}</td>
             <td>
-                <button onclick="openTicketDetailsModal('${ticket.id}')" class="button secondary small">View/Reply</button>
-                ${(ticket.status !== 'resolved_by_user' && ticket.status !== 'closed_by_admin') ? `<button onclick="updateTicketStatus('${ticket.id}', 'resolved_by_user')" class="button accent small">Mark My Issue Resolved</button>` : ''}
+                <button onclick="openTicketDetailsModal('${ticket.id}')" class="button secondary small">View Chat</button>
+                ${(ticket.status !== 'resolved_by_user' && ticket.status !== 'closed_by_admin') ? `<button onclick="updateTicketStatus('${ticket.id}', 'resolved_by_user')" class="button accent small">Mark Resolved</button>` : ''}
             </td>
         `;
     });
@@ -2016,18 +2206,16 @@ function openTicketDetailsModal(ticketId) {
         const msgDiv = document.createElement('div');
         let messageClass = 'ticket-message ';
         
-        // [FIXED] Corrected logic for assigning message class
         if (msg.senderId === 'admin_user') {
             messageClass += 'admin-message';
         } else {
             messageClass += 'user-message';
         }
-
         msgDiv.className = messageClass;
 
         msgDiv.innerHTML = `
-            <strong>${msg.senderName}</strong>
-            <p>${msg.text.replace(/\n/g, '<br>')}</p>
+            <strong>${escapeHTML(msg.senderName)}</strong>
+            <p>${escapeHTML(msg.text).replace(/\n/g, '<br>')}</p>
             <small>${new Date(msg.timestamp).toLocaleString()}</small>
         `;
         messagesContainer.appendChild(msgDiv);
@@ -2057,8 +2245,15 @@ function openTicketDetailsModal(ticketId) {
 }
 
 function closeTicketDetailsModal() {
-    document.getElementById('ticket-details-modal').style.display = 'none';
-    currentOpenTicketId = null;
+    const modal = document.getElementById('ticket-details-modal');
+    if (modal) {
+        modal.classList.add('closing');
+        setTimeout(() => {
+            modal.style.display = 'none';
+            modal.classList.remove('closing');
+            currentOpenTicketId = null;
+        }, 300);
+    }
 }
 
 function submitTicketReply() {
@@ -2073,7 +2268,7 @@ function submitTicketReply() {
         return;
     }
 
-    const replyMessage = document.getElementById('ticket-reply-message').value.trim();
+    const replyMessage = getInputValue('ticket-reply-message').trim();
     if (!replyMessage) {
         displayNotification("Reply message cannot be empty.", "error");
         return;
@@ -2104,7 +2299,8 @@ function submitTicketReply() {
     } else {
         renderUserSupportTickets();
     }
-    document.getElementById('ticket-reply-message').value = '';
+    const replyMessageInput = document.getElementById('ticket-reply-message');
+    if (replyMessageInput) replyMessageInput.value = '';
 }
 
 function updateTicketStatus(ticketId, newStatus, fromModal = false) {
@@ -2158,7 +2354,7 @@ function renderAdminDashboard() {
     updateNotificationBellCount();
 
     const lastAdminSection = sessionStorage.getItem('p2p_reform_adminSection') || 'ad-overview';
-    const buttonForAdminSection = document.querySelector(`#admin-dashboard-view .dashboard-sidebar button[onclick*="'${lastAdminSection}'"]`);
+     const buttonForAdminSection = document.querySelector(`#admin-dashboard-view .dashboard-sidebar button[onclick*="'${lastAdminSection}'"]`);
     if (buttonForAdminSection) {
         showAdminDashboardSection(lastAdminSection, buttonForAdminSection, true);
     } else {
@@ -2185,8 +2381,8 @@ function loadSystemSaleGeneralSettingsForAdminForm() {
     document.getElementById('admin-cooldown-duration').value = systemSaleConfig.cooldownDurationSeconds || 60;
     document.getElementById('admin-default-currency').value = systemSaleConfig.defaultSystemCurrency || "USD";
     document.getElementById('current-default-system-currency-display').textContent = systemSaleConfig.defaultSystemCurrency || "USD";
+    document.getElementById('admin-broadcast-message').value = systemSaleConfig.broadcastMessage || '';
 
-    // P2P Requirement Toggle
     const p2pToggle = document.getElementById('admin-p2p-access-toggle');
     const p2pStatus = document.getElementById('admin-p2p-access-status');
     p2pToggle.checked = systemSaleConfig.p2pRequirementEnabled;
@@ -2194,16 +2390,44 @@ function loadSystemSaleGeneralSettingsForAdminForm() {
     p2pStatus.style.color = systemSaleConfig.p2pRequirementEnabled ? 'var(--danger-color)' : 'var(--success-color)';
 }
 
+function setBroadcastMessage() {
+    const message = getInputValue('admin-broadcast-message').trim();
+    if (message) {
+        systemSaleConfig.broadcastMessage = message;
+        saveState();
+        displayNotification('Broadcast message has been set and will be shown to users upon login.', 'success');
+    } else {
+        displayNotification('Broadcast message cannot be empty.', 'error');
+    }
+}
+
+function clearBroadcastMessage() {
+    systemSaleConfig.broadcastMessage = '';
+    saveState();
+    const broadcastInput = document.getElementById('admin-broadcast-message');
+    if (broadcastInput) broadcastInput.value = '';
+    displayNotification('Broadcast message has been cleared.', 'info');
+}
+
+function checkBroadcastMessage() {
+    if (systemSaleConfig.broadcastMessage && systemSaleConfig.broadcastMessage.trim() !== '') {
+        setTimeout(() => {
+            displayNotification(systemSaleConfig.broadcastMessage, 'info');
+        }, 500);
+    }
+}
+
+
 function toggleP2PRequirementDefault() {
     const p2pToggle = document.getElementById('admin-p2p-access-toggle');
     systemSaleConfig.p2pRequirementEnabled = p2pToggle.checked;
     saveState();
-    loadSystemSaleGeneralSettingsForAdminForm(); // Refresh the display
+    loadSystemSaleGeneralSettingsForAdminForm(); 
     displayNotification(`Default P2P access requirement is now ${systemSaleConfig.p2pRequirementEnabled ? 'ENABLED' : 'DISABLED'}.`, 'info');
 }
 
 function saveDefaultSystemCurrency() {
-    const newDefaultCurrency = document.getElementById('admin-default-currency').value;
+    const newDefaultCurrency = getInputValue('admin-default-currency');
     if (newDefaultCurrency && (newDefaultCurrency === "USD" || newDefaultCurrency === "ZAR" || newDefaultCurrency === "BTC")) {
         systemSaleConfig.defaultSystemCurrency = newDefaultCurrency;
         saveState();
@@ -2215,20 +2439,20 @@ function saveDefaultSystemCurrency() {
 }
 
 function saveSystemSaleTimers() {
-    const saleDuration = parseInt(document.getElementById('admin-sale-duration').value);
-    const cooldownDuration = parseInt(document.getElementById('admin-cooldown-duration').value);
+    const saleDuration = parseInt(getInputValue('admin-sale-duration'));
+    const cooldownDuration = parseInt(getInputValue('admin-cooldown-duration'));
 
     if (isNaN(saleDuration) || saleDuration <=0 || isNaN(cooldownDuration) || cooldownDuration <=0) {
-        displayNotification("Sale and Cooldown durations must be positive numbers.", "error");
+        displayNotification("Sale and Cooldown durations must be be positive numbers.", "error");
         return;
     }
     systemSaleConfig.saleDurationSeconds = saleDuration;
     systemSaleConfig.cooldownDurationSeconds = cooldownDuration;
     saveState();
-    if (currentUser && !currentUser.isAdmin && document.getElementById('user-dashboard-view').classList.contains('hidden') === false && currentDashboardSectionId.user === 'ud-system-sale') {
-         initializeSystemSaleCycle();
-    }
-    displayNotification("System sale timers saved successfully.", "success");
+    
+    localStorage.removeItem('p2p_reform_sale_cycle_state');
+    
+    displayNotification("System sale timers saved. The timer will use the new durations on its next cycle.", "success");
 }
 
 function renderAdminSystemSalePlansList() {
@@ -2266,16 +2490,14 @@ function renderAdminSystemSalePlansList() {
     plansListDiv.appendChild(table);
 }
 function handleAddOrUpdateSystemSalePlan() {
-    const name = document.getElementById('plan-name').value.trim();
-    const cost = parseFloat(document.getElementById('plan-cost').value);
-    const currency = document.getElementById('plan-currency').value;
-    const coinsAwarded = parseInt(document.getElementById('plan-coins-awarded').value);
-    const returnPercentage = parseFloat(document.getElementById('plan-return-percentage').value);
-    const maturityValue = parseInt(document.getElementById('plan-maturity-value').value);
-    const maturityUnit = document.getElementById('plan-maturity-unit').value;
-    const planBankName = document.getElementById('plan-bank-name').value.trim();
-    const planBankAccount = document.getElementById('plan-bank-account').value.trim();
-    const planBtcWallet = document.getElementById('plan-btc-wallet').value.trim();
+    const name = getInputValue('plan-name').trim();
+    const cost = parseFloat(getInputValue('plan-cost'));
+    const currency = getInputValue('plan-currency');
+    const coinsAwarded = parseInt(getInputValue('plan-coins-awarded'));
+    const returnPercentage = parseFloat(getInputValue('plan-return-percentage'));
+    const maturityValue = parseInt(getInputValue('plan-maturity-value'));
+    const maturityUnit = getInputValue('plan-maturity-unit');
+    const planUsdtWallet = getInputValue('plan-btc-wallet').trim(); // HTML ID is plan-btc-wallet
 
     if (!name || isNaN(cost) || cost <=0 || !currency || isNaN(coinsAwarded) || coinsAwarded <=0 || isNaN(returnPercentage) || returnPercentage < 0 || isNaN(maturityValue) || maturityValue <= 0) {
         displayNotification('All fields (Name, Cost, Currency, Base Coins, Return %, Maturity) must be valid positive numbers.', 'error');
@@ -2298,7 +2520,7 @@ function handleAddOrUpdateSystemSalePlan() {
 
     const planData = {
         name, cost, currency, coinsAwarded, returnPercentage, maturityDurationSeconds,
-        planBankName, planBankAccount, planBtcWallet
+        planUsdtWallet
     };
 
     if (currentEditingPlanId) {
@@ -2334,10 +2556,7 @@ function populatePlanEditForm(planId) {
     const duration = deconstructDuration(plan.maturityDurationSeconds);
     document.getElementById('plan-maturity-value').value = duration.value;
     document.getElementById('plan-maturity-unit').value = duration.unit;
-
-    document.getElementById('plan-bank-name').value = plan.planBankName || '';
-    document.getElementById('plan-bank-account').value = plan.planBankAccount || '';
-    document.getElementById('plan-btc-wallet').value = plan.planBtcWallet || '';
+    document.getElementById('plan-btc-wallet').value = plan.planUsdtWallet || '';
 
     document.getElementById('add-plan-button').innerHTML = '<i class="fas fa-save"></i> Update Plan';
     document.getElementById('cancel-edit-plan-button').classList.remove('hidden');
@@ -2404,7 +2623,6 @@ function clearP2PTransactionLogs() {
         "Are you sure you want to clear ALL P2P Transaction logs?",
         () => {
             transactions = [];
-            // Reset any offers that were pending sale
             sellOffers.forEach(offer => {
                 if (offer.status === 'pending_sale') offer.status = 'active';
             });
@@ -2442,7 +2660,7 @@ function renderAdminSystemPurchaseRequests() {
         let proofDisplay = 'No Proof';
         if (req.paymentProofDataUrl && req.paymentProofDataUrl.startsWith('data:image')) {
             proofDisplay = `<button class="secondary small" onclick="openProofViewerModal('${req.paymentProofDataUrl}', 'Proof for ${req.userName} - ${req.planDetails.name}')">View Proof</button>`;
-        } else if (req.paymentProofDataUrl) { // Handle other file types or links
+        } else if (req.paymentProofDataUrl) {
              proofDisplay = `<a href="${req.paymentProofDataUrl}" target="_blank" title="View Proof">${req.paymentProofFilename || 'View File'}</a>`;
         } else if (req.paymentProofFilename) {
             proofDisplay = req.paymentProofFilename;
@@ -2540,8 +2758,7 @@ function renderAdminUserList() {
     
     userListArea.innerHTML = '';
     
-    const searchInput = document.getElementById('admin-user-search');
-    const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
+    const searchTerm = getInputValue('admin-user-search').toLowerCase().trim();
 
     const filteredUsers = searchTerm ? users.filter(user =>
         user.name.toLowerCase().includes(searchTerm) ||
@@ -2591,10 +2808,7 @@ function adminAdjustUserBalance(userId) {
         displayNotification('User not found.', 'error');
         return;
     }
-    const amountInput = document.getElementById(`adj-bal-${userId}`);
-    if (!amountInput) return;
-
-    const newBalanceStr = amountInput.value;
+    const newBalanceStr = getInputValue(`adj-bal-${userId}`);
     if (newBalanceStr.trim() === '') {
         displayNotification('Please enter a balance amount.', 'error');
         return;
@@ -2610,7 +2824,6 @@ function adminAdjustUserBalance(userId) {
     showCustomConfirm(
         `This will set <strong>${user.name}'s</strong> liquid COIN balance to <strong>${newBalance.toFixed(2)}</strong>. This will then be AUTOMATICALLY listed on the P2P market. Proceed?`,
         () => {
-            // Set balance first
             user.coinBalance = newBalance;
             
             if (newBalance <= 0) {
@@ -2620,7 +2833,8 @@ function adminAdjustUserBalance(userId) {
                 return;
             }
 
-            // Find origin data for pricing the P2P offer
+            // Find a valid pricing origin for the new P2P offer.
+            // Priority: Most recent user asset. Fallback: First available system plan.
             const userAssetsSorted = userAssets
                 .filter(a => a.userId === user.id && a.origin)
                 .sort((a,b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
@@ -2647,17 +2861,17 @@ function adminAdjustUserBalance(userId) {
                 if (result.success) {
                     saveState();
                     renderAdminUserList();
-                    displayNotification(`${user.name}'s balance was set and automatically listed on P2P market.`, 'success');
+                    displayNotification(`${user.name}'s balance was set to ${newBalance.toFixed(2)} and automatically listed on P2P market.`, 'success');
                     addGlobalNotification(user.id, "Balance Credited & Listed", `Admin credited your account, and your balance of ${result.offer.amount.toFixed(2)} COINs has been placed on the P2P market.`, 'ud-my-assets', 'success');
                 } else {
-                    saveState(); // Still save the balance change
+                    saveState(); 
                     renderAdminUserList();
-                    displayNotification(`Balance set, but P2P listing failed: ${result.message}`, 'error');
+                    displayNotification(`Balance for ${user.name} was set to ${newBalance.toFixed(2)}, but P2P listing failed: ${result.message}`, 'error');
                 }
             } else {
-                saveState(); // Still save the balance change
+                saveState(); 
                 renderAdminUserList();
-                displayNotification('Balance set, but could not list on P2P: No suitable pricing origin (user asset or system plan) found.', 'error');
+                displayNotification(`Balance for ${user.name} was set to ${newBalance.toFixed(2)}, but could not list on P2P: No suitable pricing origin (user asset or system plan) found.`, 'error');
             }
         }, "Confirm Balance Adjustment & P2P Listing", "Confirm & List", "accent"
     );
@@ -2699,7 +2913,7 @@ function deleteUser(userId) {
             globalNotifications = globalNotifications.filter(n => n.target !== userId);
 
             saveState();
-            renderAdminDashboard(); // Full refresh
+            renderAdminDashboard(); 
             displayNotification(`User ${userToDelete.name} and all associated data permanently deleted.`, 'success');
         }, "Confirm User Deletion", "DELETE USER", "danger"
     );
@@ -2708,8 +2922,7 @@ function renderAdminP2PTransactions() {
     const p2pArea = document.getElementById('admin-p2p-transactions-area');
     if(!p2pArea) return;
     p2pArea.innerHTML = '';
-    const filterSelect = document.getElementById('admin-p2p-filter-status');
-    const filterStatus = filterSelect ? filterSelect.value : 'all';
+    const filterStatus = getInputValue('admin-p2p-filter-status', 'all');
 
     let filteredTransactions = [...transactions];
     if (filterStatus !== 'all') {
@@ -2899,49 +3112,85 @@ function rejectKyc(userId) {
 function openAdminEditKycModal(userId) {
     const user = users.find(u => u.id === userId);
     if (!user) { displayNotification("User not found.", "error"); return; }
-    document.getElementById('admin-edit-kyc-userId').value = userId;
-    document.getElementById('admin-edit-kyc-modal-title').textContent = `Edit KYC: ${user.name}`;
+    
+    const modal = document.getElementById('admin-edit-kyc-modal');
+    if (!modal) {
+        console.error("Admin Edit KYC modal element not found in HTML.");
+        return;
+    }
+
+    const setInputValue = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.value = value || '';
+    };
+    const setTextContent = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    };
+    const setChecked = (id, checked) => {
+        const el = document.getElementById(id);
+        if (el) el.checked = checked;
+    };
+    
+    setInputValue('admin-edit-kyc-userId', userId);
+    setTextContent('admin-edit-kyc-modal-title', `Edit KYC: ${user.name}`);
+
     const kyc = user.kycData || {};
-    document.getElementById('admin-kyc-bank-name').value = kyc.bankName || '';
-    document.getElementById('admin-kyc-bank-account').value = kyc.bankAccount || '';
-    document.getElementById('admin-kyc-usdt-wallet').value = kyc.usdtWallet || '';
-    document.getElementById('admin-kyc-telephone').value = kyc.telephone || '';
+    setInputValue('admin-kyc-usdt-wallet', kyc.usdtWallet);
+    // Note: The HTML doesn't contain `admin-kyc-btc-wallet`, but the logic to save it is present
+    // which is fine as it won't crash. Admin can add it via this modal if needed.
+    setInputValue('admin-kyc-telephone', kyc.telephone);
+    setInputValue('admin-kyc-status', user.kycStatus || 'none');
+    
     populateCountryDropdown('admin-kyc-country', kyc.country);
-    document.getElementById('admin-kyc-status').value = user.kycStatus || 'none';
-
-    // P2P Bypass checkbox
-    document.getElementById('admin-kyc-p2p-bypass').checked = !user.p2pMarketRequiresInitialPurchase;
-
+    
+    setChecked('admin-kyc-p2p-bypass', !user.p2pMarketRequiresInitialPurchase);
+    
     const rejectionGroup = document.getElementById('admin-kyc-rejection-reason-group');
-    const rejectionTextarea = document.getElementById('admin-kyc-rejection-reason');
-    rejectionGroup.classList.toggle('hidden', document.getElementById('admin-kyc-status').value !== 'rejected');
-    rejectionTextarea.value = kyc.rejectionReason || '';
-    document.getElementById('admin-kyc-doc-display').innerHTML = kyc.documentUrl ? `<a href="${kyc.documentUrl}" target="_blank">View Current Document</a>` : 'No Document Provided';
-    document.getElementById('admin-kyc-new-document').value = '';
-    document.getElementById('admin-edit-kyc-modal').style.display = 'block';
+    const statusSelect = document.getElementById('admin-kyc-status');
+    if (rejectionGroup && statusSelect) {
+        rejectionGroup.classList.toggle('hidden', statusSelect.value !== 'rejected');
+    }
+    setInputValue('admin-kyc-rejection-reason', kyc.rejectionReason);
+    
+    const docDisplay = document.getElementById('admin-kyc-doc-display');
+    if (docDisplay) {
+         docDisplay.innerHTML = kyc.documentUrl ? `<a href="${kyc.documentUrl}" target="_blank">View Current Document</a>` : 'No Document Provided';
+    }
+
+    setInputValue('admin-kyc-new-document', '');
+
+    modal.style.display = 'block';
 }
 
 function closeAdminEditKycModal() {
-    document.getElementById('admin-edit-kyc-modal').style.display = 'none';
+    const modal = document.getElementById('admin-edit-kyc-modal');
+    if (modal) {
+        modal.classList.add('closing');
+        setTimeout(() => {
+            modal.style.display = 'none';
+            modal.classList.remove('closing');
+        }, 300);
+    }
 }
 
 function saveAdminKycChanges() {
-    const userId = document.getElementById('admin-edit-kyc-userId').value;
+    const userId = getInputValue('admin-edit-kyc-userId');
     const user = users.find(u => u.id === userId);
     if (!user) { displayNotification('User not found.', 'error'); return; }
 
     if (!user.kycData) user.kycData = {};
     const oldKycStatus = user.kycStatus;
-    user.kycData.bankName = document.getElementById('admin-kyc-bank-name').value.trim();
-    user.kycData.bankAccount = document.getElementById('admin-kyc-bank-account').value.trim();
-    user.kycData.usdtWallet = document.getElementById('admin-kyc-usdt-wallet').value.trim();
-    user.kycData.telephone = document.getElementById('admin-kyc-telephone').value.trim();
-    user.kycData.country = document.getElementById('admin-kyc-country').value;
-    user.kycStatus = document.getElementById('admin-kyc-status').value;
-    user.p2pMarketRequiresInitialPurchase = !document.getElementById('admin-kyc-p2p-bypass').checked;
-    user.kycData.rejectionReason = user.kycStatus === 'rejected' ? document.getElementById('admin-kyc-rejection-reason').value.trim() : null;
 
-    const newDocumentFile = document.getElementById('admin-kyc-new-document').files[0];
+    user.kycData.usdtWallet = getInputValue('admin-kyc-usdt-wallet', user.kycData.usdtWallet).trim();
+    user.kycData.telephone = getInputValue('admin-kyc-telephone', user.kycData.telephone).trim();
+    user.kycData.country = getInputValue('admin-kyc-country', user.kycData.country);
+    user.kycStatus = getInputValue('admin-kyc-status', user.kycStatus);
+    user.p2pMarketRequiresInitialPurchase = !getCheckedValue('admin-kyc-p2p-bypass', !user.p2pMarketRequiresInitialPurchase);
+    user.kycData.rejectionReason = user.kycStatus === 'rejected' ? getInputValue('admin-kyc-rejection-reason').trim() : null;
+    
+    const newDocumentFile = getFileInput('admin-kyc-new-document');
+
     const processSave = () => {
         saveState();
         renderAdminUserList();
@@ -2998,7 +3247,7 @@ function renderAdminP2POffers() {
             <td>${formatCurrency(offer.amount * price, currency)}</td>
             <td><span class="status-repackaged">${statusText}</span></td>
             <td>
-                <button class="secondary small" onclick="openAdminRepackageP2POfferModal('${offer.id}')">Edit Name</button>
+                <button class="secondary small" onclick="openAdminRepackageP2POfferModal('${offer.id}')">Edit Offer</button>
                 <button class="danger small" onclick="handleAdminDeleteP2POffer('${offer.id}')">Delete</button>
             </td>
         `;
@@ -3019,12 +3268,12 @@ function handleAdminDeleteP2POffer(offerId) {
         `Are you sure you want to delete this offer from ${offer.sellerName}? The coins will be returned to the user's liquid balance.`,
         () => {
             if (seller) {
-                seller.coinBalance += offer.amount; // Return coins to liquid balance
-            }
-
-            const asset = userAssets.find(a => a.id === offer.assetId);
-            if (asset) {
-                asset.status = 'credited'; // Revert asset status
+                seller.coinBalance += offer.amount;
+                userAssets.forEach(asset => {
+                    if (asset.userId === seller.id && asset.status === 'listed_on_market') {
+                        asset.status = 'credited';
+                    }
+                });
             }
             
             sellOffers.splice(offerIndex, 1);
@@ -3045,8 +3294,8 @@ function openAdminRepackageP2POfferModal(offerId) {
     
     document.getElementById('admin-repackage-p2p-offer-id').value = offerId;
     const modal = document.getElementById('admin-repackage-p2p-offer-modal');
-    modal.querySelector('h3').textContent = 'Edit P2P Offer Name';
-    modal.querySelector('p').textContent = 'All financial terms are set automatically. You can only edit the display name for this P2P offer.';
+    modal.querySelector('h3').textContent = 'Edit P2P Offer';
+    modal.querySelector('p').textContent = 'All financial terms are set automatically. You can edit the display name for this P2P offer.';
 
     const originalDetailsDiv = document.getElementById('admin-repackage-p2p-original-details');
     originalDetailsDiv.innerHTML = `
@@ -3059,28 +3308,29 @@ function openAdminRepackageP2POfferModal(offerId) {
     
     document.getElementById('admin-repackage-plan-name').value = offer.adminPlanName || `P2P Program from ${offer.sellerName}`;
 
-    // [FIXED] More robustly hide the non-functional fields
-    document.getElementById('admin-repackage-price').parentElement.parentElement.style.display = 'none';
-    document.getElementById('admin-repackage-return').parentElement.parentElement.style.display = 'none';
+    modal.querySelectorAll('.form-inline-group').forEach(el => el.classList.add('hidden'));
     
     modal.style.display = 'block';
 }
 
 function closeAdminRepackageP2POfferModal() {
     const modal = document.getElementById('admin-repackage-p2p-offer-modal');
-    modal.style.display = 'none';
-    
-    // [FIXED] Restore visibility for next time
-    modal.querySelector('#admin-repackage-price').parentElement.parentElement.style.display = 'flex';
-    modal.querySelector('#admin-repackage-return').parentElement.parentElement.style.display = 'flex';
+    if(modal) {
+        modal.classList.add('closing');
+        setTimeout(() => {
+            modal.style.display = 'none';
+            modal.classList.remove('closing');
+            modal.querySelectorAll('.form-inline-group').forEach(el => el.classList.remove('hidden'));
+        }, 300);
+    }
 }
 
 function saveAdminRepackageP2POffer() {
-    const offerId = document.getElementById('admin-repackage-p2p-offer-id').value;
+    const offerId = getInputValue('admin-repackage-p2p-offer-id');
     const offer = sellOffers.find(o => o.id === offerId);
     if (!offer) { displayNotification("Offer not found.", "error"); return; }
 
-    const newPlanName = document.getElementById('admin-repackage-plan-name').value.trim();
+    const newPlanName = getInputValue('admin-repackage-plan-name').trim();
 
     if (!newPlanName) {
         displayNotification("Please enter a valid plan name.", "error");
@@ -3176,26 +3426,35 @@ window.onload = () => {
     const lastView = sessionStorage.getItem('p2p_reform_currentView') || 'landing-page-view';
 
     if (persistedUserJSON) {
-        const persistedUserData = JSON.parse(persistedUserJSON);
-        if (persistedUserData.isAdmin) {
-            currentUser = persistedUserData;
-        } else {
-            const freshUser = users.find(u => u.id === persistedUserData.id);
-            if (freshUser) {
-                currentUser = freshUser;
+        try {
+            const persistedUserData = JSON.parse(persistedUserJSON);
+            if (persistedUserData.isAdmin) {
+                currentUser = persistedUserData;
             } else {
-                handleLogout();
-                return;
+                const freshUser = users.find(u => u.id === persistedUserData.id);
+                if (freshUser) {
+                    currentUser = freshUser;
+                    // Robustly check for matured assets on every page load for the logged-in user.
+                    if (checkAndProcessMaturedAssets(currentUser)) {
+                        saveState(); // Save changes if any assets matured.
+                    }
+                } else {
+                    handleLogout();
+                    return;
+                }
             }
+            if (currentUser.isAdmin) {
+                switchView('admin-dashboard-view', true);
+                renderAdminDashboard();
+            } else {
+                switchView('user-dashboard-view', true);
+                renderUserDashboard();
+            }
+            setActiveLink(document.getElementById('nav-dashboard'));
+        } catch (e) {
+            console.error("Error parsing persisted user data", e);
+            handleLogout();
         }
-        if (currentUser.isAdmin) {
-            switchView('admin-dashboard-view', true);
-            renderAdminDashboard();
-        } else {
-            switchView('user-dashboard-view', true);
-            renderUserDashboard();
-        }
-        setActiveLink(document.getElementById('nav-dashboard'));
     } else {
         switchView(lastView, true);
         const linkForLastView = document.querySelector(`#nav-links a[onclick*="'${lastView}'"]`) || document.querySelector('#nav-links li a[onclick*=\'landing-page-view\']');
